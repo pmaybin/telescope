@@ -1,4 +1,58 @@
 body {
   margin: 0;
   font-family: system-ui, sans-serif;
+  line-height: 1.4;
+}
+main {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.5rem;
+  margin: 1rem 0;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+th,
+td {
+  text-align: left;
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid #ddd;
+  vertical-align: top;
+}
+.num {
+  text-align: right;
+}
+.dimmed {
+  opacity: 0.5;
+}
+.muted {
+  color: #666;
+}
+.error {
+  color: #8a1c1c;
+  background: #fdecec;
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+}
+.banner {
+  background: #fff6d6;
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+}
+.badge {
+  margin-left: 0.4rem;
+  padding: 0 0.4rem;
+  font-size: 0.75rem;
+  border: 1px solid #999;
+  border-radius: 999px;
+  color: #444;
+}
+.pager {
+  margin: 1rem 0;
 }
