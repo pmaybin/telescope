@@ -38,16 +38,15 @@ lint: ## Run all linters and type checks
 	cd frontend && pnpm lint
 	cd frontend && pnpm fmt:check
 	cd frontend && pnpm typecheck
+	cd frontend && pnpm gen:api:check
 
 fmt: ## Format backend and frontend code
 	cd backend && uv run ruff check --fix
 	cd backend && uv run ruff format
 	cd frontend && pnpm fmt
 
-openapi: ## Export the OpenAPI schema
-	# TODO: the contract bead creates telescope.export_openapi
+openapi: ## Export the OpenAPI contract to openapi.json
 	cd backend && uv run python -m telescope.export_openapi
 
-gen-client: ## Generate the typed frontend API client
-	# TODO: the contract bead fills this in
-	@echo "gen-client: not implemented yet"
+gen-client: openapi ## Regenerate openapi.json and the typed TS client
+	cd frontend && pnpm gen:api
