@@ -14,14 +14,14 @@ The API must filter by language and minimum stars, sort by stars/updated/pushed/
 
 **Page fetching**: serial vs bounded concurrency.
 - Serial: GitHub advises against concurrent requests to avoid secondary limits ([best practices](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api)), and it is the safest. But 30 sequential round trips of about 300ms each take about 9s on a cold cache.
-- Bounded concurrent (4): cold fetch is about 2-3s. The risk is tripping the secondary rate limit.
+- Bounded concurrent (8): faster cold fetch. The risk is tripping the secondary rate limit.
 
 ## Decision
 - Request: `GET /orgs/{org}/repos?type=public&sort=full_name&direction=asc&per_page=100&page=N`, with `Accept: application/vnd.github+json`, `X-GitHub-Api-Version: 2022-11-28` and a `User-Agent`.
 - `type=public` is always sent, so a reviewer's token that can see private repos never leaks them (contract doc). `sort=full_name` gives a deterministic, contiguous order, so page N's ETag and rows are stable, which makes per-page revalidation work (ADR-0003).
 - The API `type` param (all/sources/forks) is a **local** filter on the `fork` flag. It never multiplies upstream datasets.
-- Walk: fetch page 1, read `rel="last"` from the `Link` header to learn N, then fetch pages 2..N with concurrency 4 (a semaphore under `asyncio.TaskGroup`). If `last` is missing but `next` is present, follow `next` serially. We never build page URLs ourselves.
-- **Concurrency trade-off, stated plainly:** we deviate from GitHub's guidance to prefer serial requests, in exchange for cold-start latency. Mitigations: a small cap (4), honouring `retry-after` and the secondary-limit handling in ADR-0006/0007, and `github_page_concurrency` as a setting, where 1 restores serial behaviour. A failure on any page fails the whole fetch and cancels the siblings.
+- Walk: fetch page 1, read `rel="last"` from the `Link` header to learn N, then fetch pages 2..N with concurrency 8 (a semaphore under `asyncio.TaskGroup`). If `last` is missing but `next` is present, follow `next` serially. We never build page URLs ourselves.
+- **Concurrency trade-off, stated plainly:** we deviate from GitHub's guidance to prefer serial requests, in exchange for cold-start latency. Mitigations: a small cap (8), honouring `retry-after` and the secondary-limit handling in ADR-0006/0007, and `github_page_concurrency` as a setting, where 1 restores serial behaviour. A failure on any page fails the whole fetch and cancels the siblings.
 - A `Snapshot` is built only from a complete walk. Partial data is never representable.
 
 ## Consequences
@@ -31,3 +31,6 @@ The API must filter by language and minimum stars, sort by stars/updated/pushed/
 - Con: memory is O(repos per org) per cached org. This is fine for the scale here, and bounded by the LRU in ADR-0003.
 - Con: data can be up to the TTL old. We expose `snapshot.fetched_at` and `stale` so that is visible.
 - A 404 on `/orgs/{org}/repos` is treated as org-not-found. A `/users/{name}/repos` fallback was considered and left out of scope.
+
+## Update (measured end to end, 2026-11-17)
+Real page latency was about 1–1.5s per 100-repo page, not 300ms. Measured cold fetches: google (30 pages, tokenless, concurrency 4) took 13s, and microsoft (85 pages, token, concurrency 4) took 33s. The default was raised to **8**, which roughly halves cold-start time and still stays far below GitHub's 100-concurrent-request secondary limit. Warm requests are served from the snapshot in about 30ms.

@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     github_api_url: str = "https://api.github.com"
     github_timeout_s: float = 10.0
     github_max_retries: int = 3
-    github_page_concurrency: int = 4
+    github_page_concurrency: int = 8
     cache_ttl_seconds: int = 600
     cache_backend: Literal["memory", "redis"] = "memory"
     redis_url: str = "redis://localhost:6379/0"
