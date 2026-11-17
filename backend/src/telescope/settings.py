@@ -13,6 +13,9 @@ class Settings(BaseSettings):
 
     github_token: SecretStr | None = None
     github_api_url: str = "https://api.github.com"
+    github_timeout_s: float = 10.0
+    github_max_retries: int = 3
+    github_page_concurrency: int = 4
     cache_ttl_seconds: int = 600
     log_level: str = "INFO"
     cors_origins: list[str] = ["http://localhost:5173"]
