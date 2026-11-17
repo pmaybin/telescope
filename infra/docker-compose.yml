@@ -26,6 +26,8 @@ services:
     environment:
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS:-600}
+      CACHE_BACKEND: ${CACHE_BACKEND:-memory}
+      REDIS_URL: redis://redis:6379/0
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       OTEL_SERVICE_NAME: telescope-api
       OTEL_EXPORTER_OTLP_ENDPOINT: http://lgtm:4318
@@ -43,13 +45,14 @@ services:
     depends_on:
       - api
 
-  # Placeholder for the optional shared-cache stretch bead. Enable with
-  # `--profile redis` after uncommenting.
-  # redis:
-  #   image: redis:7-alpine
-  #   profiles: ["redis"]
-  #   ports:
-  #     - "6379:6379"
-  #   healthcheck:
-  #     test: ["CMD", "redis-cli", "ping"]
-  #     interval: 10s
+  # Optional shared snapshot cache. Enable with `--profile redis` and CACHE_BACKEND=redis.
+  redis:
+    image: redis:7-alpine
+    profiles: ["redis"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5

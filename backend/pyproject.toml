@@ -16,6 +16,7 @@ dependencies = [
     "opentelemetry-instrumentation-httpx==0.66b2",
     "opentelemetry-instrumentation-logging==0.66b2",
     "python-json-logger>=4.2.0",
+    "redis>=8.1.0",
 ]
 
 [build-system]
@@ -33,6 +34,7 @@ dev = [
     "respx",
     "ruff",
     "mypy",
+    "fakeredis>=2.40.0",
 ]
 
 [tool.ruff]

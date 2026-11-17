@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     github_max_retries: int = 3
     github_page_concurrency: int = 4
     cache_ttl_seconds: int = 600
+    cache_backend: Literal["memory", "redis"] = "memory"
+    redis_url: str = "redis://localhost:6379/0"
     log_level: str = "INFO"
     cors_origins: list[str] = ["http://localhost:5173"]
 
