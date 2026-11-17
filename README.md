@@ -35,6 +35,12 @@ CACHE_BACKEND=redis docker compose -f infra/docker-compose.yml --env-file .env -
 
 (`CACHE_BACKEND` may also be put in `.env`. `REDIS_URL` is already set to `redis://redis:6379/0` in the compose file.)
 
+### Development with hot reload
+```bash
+make dev        # same URLs as `make up`; edits to backend/src and frontend/src apply live
+```
+`make up` runs production-like images (nginx serving the static build; uvicorn without reload). `make dev` layers `infra/docker-compose.dev.yml` on top: the API restarts on any change under `backend/src`, and the web container runs Vite with HMR. Dependency changes (`pyproject.toml`, `package.json`) need another `make dev` to rebuild. Each API reload empties the in-memory cache, so the next request for a large org is a cold fetch. To keep snapshots across reloads, use `CACHE_BACKEND=redis COMPOSE_PROFILES=redis make dev`. Without Docker, run `cd backend && uv run uvicorn telescope.main:app --reload` and `cd frontend && pnpm dev` (Vite proxies `/api` to `localhost:8000`).
+
 ## Where the token goes
 
 `.env` (git-ignored) -> `docker compose --env-file .env` -> the `api` container environment -> `Settings.github_token` (a pydantic `SecretStr`) -> the `Authorization` header on GitHub requests. The token is never baked into an image, and a logging filter redacts it from log output. In production, inject `GITHUB_TOKEN` from Doppler, 1Password Connect or AWS Secrets Manager rather than a file ([ADR-0008](docs/adr/0008-secrets.md)).
@@ -48,6 +54,7 @@ CACHE_BACKEND=redis docker compose -f infra/docker-compose.yml --env-file .env -
 | `make help` | Show help | |
 | `make install` | `uv sync` and `pnpm install` | `mise run install` |
 | `make up` | Build and start the stack with Docker Compose | `mise run up` (also `mise run run`) |
+| `make dev` | Start the stack with **hot reload**: uvicorn `--reload` on mounted `backend/src`, and the Vite dev server with HMR on mounted `frontend/src` | `mise run dev` |
 | `make down` | Stop the stack | `mise run down` |
 | `make logs` | Tail stack logs | `mise run logs` |
 | `make test` | Backend and frontend tests, concurrently | `mise run test` |

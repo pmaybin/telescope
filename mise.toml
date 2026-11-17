@@ -10,6 +10,8 @@ run = "make install"
 run = "make up"
 [tasks.up]
 run = "make up"
+[tasks.dev]
+run = "make dev"
 [tasks.down]
 run = "make down"
 [tasks.logs]

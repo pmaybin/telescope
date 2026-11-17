@@ -4,7 +4,7 @@ COMPOSE := docker compose -f $(COMPOSE_FILE) $(if $(wildcard .env),--env-file .e
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install up down logs test test-backend test-frontend lint fmt openapi gen-client
+.PHONY: help install up dev down logs test test-backend test-frontend lint fmt openapi gen-client
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-16s %s\n", $$1, $$2}'
@@ -15,6 +15,10 @@ install: ## Install backend and frontend dependencies
 
 up: ## Start the stack with Docker Compose
 	$(COMPOSE) up -d --build
+
+dev: ## Start the stack with hot reload (uvicorn --reload + Vite HMR on mounted sources)
+	$(COMPOSE) -f infra/docker-compose.dev.yml up -d --build --wait
+	@echo "Web (HMR): http://localhost:$${WEB_PORT:-8080}  API: http://localhost:$${API_PORT:-8000}/docs  Grafana: http://localhost:$${GRAFANA_PORT:-3000}"
 
 down: ## Stop the stack
 	$(COMPOSE) down
