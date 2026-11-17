@@ -176,3 +176,67 @@ Commit in small, meaningful steps with conventional-commit messages. Run tests a
 "
 2026-11-17T10:25:03Z,human,human,architect,claude-opus-5-5,high,,Start the kickoff,start docs/prompts/00-architect-kickoff.md
 2026-11-17T10:31:09Z,human,human,architect,claude-opus-5-5,high,,Kickoff answers,"Runner: Makefile + thin mise. Token: fixtures first, PAT later. Cache: in-memory now, Redis if time. Pagination: I'd prefer cursor, but the option to switch to offset would be nice to have later; page is too complicated for the time constraint. LGTM: dashboard + logs + traces. Forks: expose type, default all. Hosting: it's going to be a repo and run locally for evaluation, no CI needed. Tooling: uv+ruff+mypy, pnpm."
+2026-11-17T10:33:00Z,architect,architect,researcher,claude-sonnet-5-5,medium,tel-r1,Research GitHub REST API pagination/rate limits/conditional requests/alternatives,"You are a researcher for ""telescope"", a FastAPI service that will serve `GET /api/orgs/{org}/repos` (filter by language incl. none, min_stars, archived; sort by stars/updated/name; paginate) using the GitHub REST API. It must work both with a token (5,000 req/h) and without one (60 req/h per IP). The org `google` has roughly 2.5k+ repos. Bead: tel-r1.
+
+Using primary sources (docs.github.com, the GitHub changelog, community discussions only when the docs are silent), answer each question with a citation URL:
+1. `GET /orgs/{org}/repos`: the query params (type, sort, direction, per_page max, page). The `Link` header format (rel=next/last). Is there a hard cap on the number of pages? Do public orgs need auth? What happens if the org is a *user*, not an org (404?), and what's in the 404 body?
+2. Primary rate limits: the x-ratelimit-limit/remaining/used/reset/resource headers. When the limit is exceeded, is the status 403 or 429, and what's in the body? `retry-after` behaviour.
+3. Secondary rate limits: how to detect them (status, `retry-after`, body message), and the recommended backoff.
+4. Conditional requests: ETag / If-None-Match on this endpoint, per page. Do 304 responses count against the primary limit (a) authenticated and (b) unauthenticated? Quote the docs exactly. Does Link pagination still work with ETags per page?
+5. Alternatives: the Search API (`/search/repositories?q=org:google language:X stars:>=N archived:false`). Its 1,000-result cap, its separate rate limit (30/min auth, 10/min unauth), and whether `language:none`-style queries exist. GraphQL (`organization.repositories`): does it need auth (yes?), how costly is it in points, and does it allow filtering by language or stars server-side? Conclude: is fetch-all-then-filter-locally the right default?
+6. Which fields come back for each repo (name, full_name, html_url, description, language, stargazers_count, forks_count, open_issues_count, archived, fork, license{spdx_id,name}, updated_at, pushed_at, topics, visibility). Which can be null or empty?
+7. Any gotchas: `updated_at` vs `pushed_at` semantics, and the `X-GitHub-Api-Version` header and its current recommended value.
+
+Write your findings to /home/paul/.t3/projects/telescope/docs/research/github-api.md (create the dir). Use concise headings, bullets and citations. End with a ""Recommendations"" section. Do not modify any other file. Do not call the GitHub API more than 3 times unauthenticated (we share a 60/h budget). Prefer docs.
+Reply with a summary of no more than 300 words covering the key facts and recommendations.
+"
+2026-11-17T10:33:00Z,architect,architect,researcher,claude-sonnet-5-5,medium,tel-r2,Research otel-lgtm image and Python OTel setup,"You are a researcher for ""telescope"": a FastAPI (Python 3.12, uvicorn) backend, a React frontend, and Docker Compose. Observability must use OpenTelemetry into the single `grafana/otel-lgtm` container (Loki, Grafana, Tempo, Prometheus/Mimir). Bead: tel-r2.
+
+Using primary sources (the grafana/docker-otel-lgtm GitHub repo README and files, opentelemetry-python(-contrib) docs, the Grafana provisioning docs), answer each question with citation URLs:
+1. `grafana/otel-lgtm`: the current version tag, exposed ports (Grafana 3000, OTLP gRPC 4317, HTTP 4318, others?), default credentials or anonymous auth, the env vars it supports, the datasource UIDs it pre-provisions (Prometheus, Loki, Tempo: exact UIDs matter for dashboard JSON), and **how to add our own dashboard JSON**: which mount path and provisioning file. Look at the repo's docker-compose examples and any `run-lgtm.sh`. Also the healthcheck and startup time.
+2. Python OTel for FastAPI plus httpx: which packages to install (opentelemetry-sdk, -exporter-otlp-proto-http or grpc, -instrumentation-fastapi, -instrumentation-httpx, -instrumentation-logging), and recommended programmatic setup vs `opentelemetry-instrument`. Env vars (OTEL_SERVICE_NAME, OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_PROTOCOL). How to make setup a no-op in tests and when no endpoint is set.
+3. Logs: the recommended way to get **structured JSON logs to stdout with trace_id/span_id**, and *also* ship logs to Loki via OTLP (the OTel LoggingHandler / LoggerProvider in Python SDK: is it stable now?). Compare with structlog vs stdlib logging plus python-json-logger. Recommend one minimal approach.
+4. Metrics: custom metric names (counter `telescope_cache_hits` etc., an observable gauge for ratelimit remaining). How OTel metric names and units map to Prometheus names in otel-lgtm (e.g. `http.server.duration` → `http_server_duration_milliseconds_bucket`? or `http_server_request_duration_seconds_bucket` with the new semconv?). Give the exact Prometheus metric names that FastAPI instrumentation produces with current versions, so the dashboard PromQL is right. Note the service name label (`job` / `service_name`).
+5. A Grafana dashboard: the minimal provisioned dashboard JSON structure. A Loki panel query by service_name. Trace links from logs (derived fields or Loki→Tempo is pre-configured in otel-lgtm?).
+6. Frontend (optional, short): is browser OTel worth it in a 4h exercise? Probably not. Just say so.
+
+Write your findings to /home/paul/.t3/projects/telescope/docs/research/otel-lgtm.md (create the dir). Concise, with code snippets where useful and citations. End with ""Recommendations"". Do not modify any other file.
+Reply with a summary of no more than 300 words covering the key facts and recommendations, including the exact datasource UIDs, the dashboard mount path and the Prometheus metric names.
+"
+2026-11-17T10:33:00Z,architect,architect,researcher,claude-sonnet-5-5,medium,tel-r3,Research OpenAPI->TS codegen and Vitest+MSW,"You are a researcher for ""telescope"": a FastAPI backend whose generated OpenAPI spec (committed as `openapi.json`) is the contract, and a React + TypeScript (Vite, pnpm) frontend that must consume a generated, typed client. Tests: Vitest + MSW mocking our backend. Bead: tel-r3.
+
+Using primary sources (npm/GitHub READMEs, official docs), answer each question with citation URLs and current versions (late 2026):
+1. Compare `openapi-typescript` + `openapi-fetch`, `orval`, and `@hey-api/openapi-ts` for this use: one GET endpoint with query params and problem+json errors, a small team, a 4h timebox, and minimal runtime. Criteria: OpenAPI 3.1 support (FastAPI emits 3.1), generated code size, how typed errors work, how easy it is to mock with MSW, and maintenance health. Recommend one.
+2. The exact generation command and package.json script, and the output location (e.g. `frontend/src/api/schema.d.ts`).
+3. FastAPI side: how to export the spec deterministically without running a server (`app.openapi()` → json.dumps with sort_keys/indent). Caveats: FastAPI's 3.1 output with `anyOf: [{type: string}, {type: null}]` for Optional fields and how the chosen generator handles it; `separate_input_output_schemas`.
+4. A spec-drift check: a pytest test that regenerates the spec in memory and compares it with the committed `openapi.json`, plus optionally a frontend check that the generated TS is up to date (e.g. regenerate then `git diff --exit-code`). Recommend a minimal pair.
+5. Vitest + MSW v2 setup for React Testing Library in jsdom (or happy-dom): the setupFiles snippet, `setupServer` from `msw/node`, and the `http.get` handler pattern. Any gotchas with Node 22 / fetch / jsdom (e.g. needing to use the global fetch, AbortSignal issues, `undici`). Is there a typed-handler helper (e.g. `openapi-msw`) that works with the generated types?
+
+Write your findings to /home/paul/.t3/projects/telescope/docs/research/codegen-and-frontend-testing.md (create the dir). Concise, with snippets and citations. End with ""Recommendations"". Do not modify any other file.
+Reply with a summary of no more than 250 words covering the recommendation and the exact commands.
+"
+2026-11-17T10:33:00Z,architect,architect,subagent,claude-sonnet-5-5,medium,tel-scaffold,Scaffold monorepo skeleton,"You are implementing bead **tel-scaffold** in the monorepo at /home/paul/.t3/projects/telescope (""telescope"": an internal tool to explore a GitHub org's public repos; FastAPI backend plus React/TS frontend; Docker Compose later). Run `bd` as `env -u BEADS_DIR bd ...` (a global env var points at the wrong db). Start with `env -u BEADS_DIR bd update tel-scaffold --status in_progress`. Do **not** git commit, and do not close the bead; the architect reviews and commits.
+
+Create a minimal, working skeleton only (no business logic). Other agents build features on it in parallel, so keep it clean and conventional.
+
+**backend/** (Python ≥3.12, uv):
+- `pyproject.toml`: project `telescope`, src layout `backend/src/telescope/`. Runtime deps: fastapi, uvicorn[standard], httpx, pydantic>=2, pydantic-settings. Dev group: pytest, pytest-xdist, pytest-asyncio (asyncio_mode=auto), respx, ruff, mypy. Configure ruff (line-length 100, select E,F,I,UP,B,SIM,ASYNC,RUF; ruff format), mypy (strict = true on `src/telescope`, pydantic plugin), and pytest (`addopts = ""-n auto -q""`, testpaths=tests). Pin `requires-python = "">=3.12""`, and add a `.python-version` with 3.12 (uv will fetch it).
+- `src/telescope/__init__.py`, `src/telescope/main.py` with `create_app() -> FastAPI` (title ""Telescope API"", version ""0.1.0"") and module-level `app = create_app()`, exposing `GET /healthz` → `{""status"":""ok""}`. `src/telescope/settings.py`: a pydantic-settings `Settings` with `github_token: SecretStr | None = None` (env `GITHUB_TOKEN`), `github_api_url: str = ""https://api.github.com""`, `cache_ttl_seconds: int = 600`, `log_level: str = ""INFO""`, and `cors_origins: list[str] = [""http://localhost:5173""]`. An empty-string GITHUB_TOKEN must be treated as None (add a validator). Load `.env` from the repo root or cwd if present.
+- `tests/test_health.py` using `httpx.AsyncClient(transport=httpx.ASGITransport(app=...))`, plus a settings test showing that the empty token becomes None.
+- Run `uv sync` and make sure `uv run pytest`, `uv run ruff check`, `uv run ruff format --check` and `uv run mypy src` pass.
+
+**frontend/** (pnpm, Vite, React 18/19 + TS):
+- Scaffold with Vite's react-ts template (non-interactive), then strip the demo content down to an `App` that renders an `<h1>Telescope</h1>`.
+- Add dev deps: vitest, @testing-library/react, @testing-library/jest-dom, @testing-library/user-event, jsdom, msw, prettier, and eslint (keep Vite's flat config). Configure Vitest in vite.config.ts (environment jsdom, setupFiles `src/test/setup.ts` that imports jest-dom). Add one trivial test `src/App.test.tsx`.
+- Vite dev server proxy: `/api` → `http://localhost:8000` (env `VITE_API_PROXY_TARGET` overrides).
+- package.json scripts: dev, build, preview, test (`vitest run`), test:watch, lint (`eslint .`), typecheck (`tsc -b --noEmit` or equivalent that works with the template's project references), fmt (`prettier --write .`), fmt:check. Add `""packageManager""` with the pnpm version you used.
+- Make sure `pnpm test`, `pnpm lint`, `pnpm typecheck` and `pnpm build` pass.
+
+**Root:**
+- `Makefile` (the source of truth; include a `help` target as the default). Targets: `install` (uv sync plus pnpm install), `up`, `down`, `logs` (wrapping `docker compose -f infra/docker-compose.yml --env-file .env`; infra comes later. Make the `--env-file` conditional so it works without `.env`), `test` (runs `test-backend` and `test-frontend` **concurrently** via `$(MAKE) -j2 --output-sync=target test-backend test-frontend`), `test-backend`, `test-frontend`, `lint` (ruff check, ruff format --check, mypy, eslint, prettier --check, tsc), `fmt`, `openapi` (placeholder that runs `uv run python -m telescope.export_openapi` – leave a TODO comment; the contract bead will create it), and `gen-client` (placeholder TODO; the contract bead fills it). Use `.PHONY`.
+- `mise.toml`: `[tools]` python = ""3.12"", node = ""22"", uv = ""latest"", pnpm = (matching version). `[tasks.*]` thin aliases for each make target (`run = ""make up""`, etc.).
+- `.env.example`, with comments: `GITHUB_TOKEN=` (optional; fine-grained PAT, public repos read-only; leave empty for 60 req/h; in production inject from Doppler / 1Password / AWS Secrets Manager rather than a file), `CACHE_TTL_SECONDS=600`, `LOG_LEVEL=INFO`.
+- `.gitignore` already exists. Extend it only if needed.
+
+Finally, run `make lint` and `make test` from the repo root and make sure both pass. Reply in no more than 200 words: the files created, the versions chosen, the command results, and any deviations.
+"

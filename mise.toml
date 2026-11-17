@@ -1,0 +1,30 @@
+[tools]
+python = "3.12"
+node = "22"
+uv = "latest"
+pnpm = "10.34.9"
+
+[tasks.install]
+run = "make install"
+[tasks.run]
+run = "make up"
+[tasks.up]
+run = "make up"
+[tasks.down]
+run = "make down"
+[tasks.logs]
+run = "make logs"
+[tasks.test]
+run = "make test"
+[tasks."test-backend"]
+run = "make test-backend"
+[tasks."test-frontend"]
+run = "make test-frontend"
+[tasks.lint]
+run = "make lint"
+[tasks.fmt]
+run = "make fmt"
+[tasks.openapi]
+run = "make openapi"
+[tasks."gen-client"]
+run = "make gen-client"
