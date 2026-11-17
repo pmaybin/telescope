@@ -5,6 +5,7 @@ import { decisions, diagrams, overview, roadmap } from './content'
 import { DecisionsSection } from './DecisionsSection'
 import { DiagramCard } from './DiagramCard'
 import { OverviewSection } from './OverviewSection'
+import { PromptHistorySection } from './PromptHistorySection'
 import { RoadmapSection } from './RoadmapSection'
 import { Toc } from './Toc'
 import type { TocItem } from './Toc'
@@ -19,6 +20,7 @@ const TOC: TocItem[] = [
     children: diagrams.map((d) => ({ id: `diagram-${d.id}`, label: d.title })),
   },
   { id: 'decisions', label: 'Decisions' },
+  { id: 'prompt-history', label: 'Prompt history' },
   { id: 'roadmap', label: 'Production roadmap' },
 ]
 
@@ -76,6 +78,7 @@ export function ArchitecturePage() {
             </div>
           </section>
           <DecisionsSection decisions={decisions} />
+          <PromptHistorySection />
           <RoadmapSection roadmap={roadmap} />
         </div>
       </div>

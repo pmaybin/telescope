@@ -2,3 +2,5 @@ dist
 pnpm-lock.yaml
 src/api/generated
 src/api/schema.d.ts
+src/architecture/prompt-log.json
+src/architecture/prompt-log-meta.json

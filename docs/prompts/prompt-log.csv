@@ -740,3 +740,44 @@ Context: the UI was just redesigned (`src/styles/tokens.css`, `src/styles/app.cs
 - Before replying, run `cd backend && uv run pytest && uv run ruff check && uv run ruff format --check && uv run mypy src` (or the frontend equivalents) and make them pass. Reply in ≤200 words: the files changed, the public API you exposed, the test count and results, and any open concerns.
 "
 2026-11-17T11:10:44Z,human,human,architect,claude-opus-5-5,high,,Expected hot reloading,I thought I would have hot reloading enabled?
+2026-11-17T11:17:53Z,human,human,architect,claude-opus-5-5,high,,"Add prompt history to architecture page (collapsed, under Decisions)","Can you please include  in the architecture page, the prompt history, as a collapsed section under the decisions"
+2026-11-17T11:18:10Z,architect,architect,subagent,claude-sonnet-5-5,medium,tel-prompts-page,Prompt history section on the architecture page,"# Bead tel-prompts-page: prompt history on the Architecture page
+The human asked: ""include in the architecture page the prompt history, as a collapsed section under the decisions.""
+
+Source of truth: `docs/prompts/prompt-log.csv`. It has the columns `timestamp_utc,actor,from,to,model,effort,bead_id,prompt_summary,prompt_full`, ~28 rows and ~120 kB of prompt text, and it is appended by `scripts/log_prompt.py`. The frontend Docker build context is `frontend/` only, so the data must live inside `frontend/`.
+
+**Your files:** `scripts/log_prompt.py`, a new `scripts/export_prompt_log.py`, the generated `frontend/src/architecture/prompt-log.json`, `frontend/src/architecture/**` (the page and its components), `frontend/src/styles/**` (if needed), the `Makefile` (one addition to `lint`, see below), and `frontend/src/**/*.test.tsx`. `.prettierignore` and `eslint.config.js` may get an ignore entry for the generated JSON.
+
+1. **Sync:**
+   - `scripts/export_prompt_log.py` reads the CSV with the `csv` module and writes `frontend/src/architecture/prompt-log.json` as `{""generated_from"": ""docs/prompts/prompt-log.csv"", ""entries"": [{""n"", ""timestamp_utc"", ""actor"", ""from"", ""to"", ""model"", ""effort"", ""bead_id"", ""summary"", ""prompt""}...]}`. Use `indent=1`, `ensure_ascii=False` and a trailing newline. Make it deterministic.
+   - A `--check` flag exits 1 if the file is stale.
+   - `log_prompt.py` calls the export (import it as a function) after every append, so the page is always current.
+   - Add `python3 scripts/export_prompt_log.py --check` to `make lint`.
+   - Run the export now.
+2. **UI:** a new section **""Prompt history""** placed directly **after Decisions** and before the Production roadmap, with its own TOC entry. It is **collapsed by default** (use a disclosure button with `aria-expanded`, or `<details>`, styled consistently with the page) and shows a one-line summary while collapsed: ""N prompts · H human · A architect→subagent · first…last timestamp"".
+   - **Lazy-load the JSON only when expanded**, via dynamic `import(""./prompt-log.json"")`, so it doesn't bloat the page chunk. Confirm in the `pnpm build` output that it lands in its own chunk.
+   - When expanded:
+     - A short intro explaining the workflow: the human prompts the architect (Opus), which delegates to Sonnet subagents and researchers. It is logged by `scripts/log_prompt.py` and the source is `docs/prompts/prompt-log.csv`.
+     - Filter chips for actor (All / Human / Architect→subagent / Researcher, counting only the actors present) and a text search over the summary, prompt and bead.
+     - A **vertical timeline**, one item per entry:
+       - the time (HH:MM UTC, with the full ISO in a title) and the elapsed time since the first entry (e.g. ""+0:42"");
+       - an actor badge (human vs architect, colour-coded) and ""from → to"";
+       - model and effort pills, plus the bead id pill;
+       - the summary as the item title;
+       - a ""Show prompt"" toggle revealing the full prompt in a scrollable `<pre>` (max-height ~360px, wrapped and monospace) with a copy button.
+       Long prompts must not blow up the layout. Make sure it looks good in both themes and on mobile.
+3. **Tests (Vitest):**
+   - The section is collapsed by default and the JSON is not rendered.
+   - Expanding shows the entries (mock the JSON import if needed, or rely on the real file and assert ≥1 item).
+   - The actor filter and search narrow the list.
+   - Show prompt reveals the text.
+   Also add a tiny Python test or a `--check` run proving the export is in sync. The `make lint` check covers that.
+4. **Verify:** the dev stack runs with hot reload at http://localhost:18080, so don't restart it, and do not call GitHub. Take headless Chrome screenshots of `/architecture`. Because the section is collapsed, open it by scrolling to it and clicking, or support a `#prompt-history` hash that auto-expands, which is nice for deep links. Capture light and dark at 1440 width and mobile at 390, look at them, and iterate. Save them to `/tmp/tel-prompts-ui/`. Then `mise exec -- make lint`, `mise exec -- make test` and `cd frontend && mise exec -- pnpm build` must pass.
+## Shared context (every build agent)
+- Repo: /home/paul/.t3/projects/telescope. This is a timeboxed senior take-home: ""telescope"" serves `GET /api/orgs/{org}/repos` (FastAPI, Python 3.12, uv) to a React+TS frontend (Vite, pnpm). Read `docs/design/api-contract.md` (the intended semantics), `backend/src/telescope/models.py` (contract and domain types: `Repo`, `Snapshot`, `RateLimitState`, `RepoQuery`…), `backend/src/telescope/errors.py` (domain exceptions) and `backend/src/telescope/observability/metrics.py` (the metrics facade: call these functions and don't import OTel elsewhere). Research notes are in `docs/research/` if relevant.
+- **Do not change** `models.py`, `errors.py` or `openapi.json`. If you believe the contract needs a change, stop and say so in your reply instead.
+- Tools: run commands via `mise exec -- …` (pnpm is only on PATH through mise). Beads: `env -u BEADS_DIR bd …` (a global env var points elsewhere). Start with `env -u BEADS_DIR bd update <bead> --status in_progress`. **Don't close the bead and don't git commit**: the architect reviews and commits. Other agents are working in parallel on other directories: **only touch the files listed as yours**. Don't run `uv add`/`pnpm add` unless your brief allows it.
+- Quality bar: mypy --strict clean, ruff clean, and tests that are meaningful, fast and **parallel-safe** (`pytest -n auto`: no shared mutable module state, no real network, no real sleeps; inject clocks and sleep functions). **Never call the real GitHub API in tests**; use `respx`. Logging: `logger = logging.getLogger(__name__)`, structured fields via `extra={...}`, and never log tokens or the Authorization header.
+- Before replying, run `cd backend && uv run pytest && uv run ruff check && uv run ruff format --check && uv run mypy src` (or the frontend equivalents) and make them pass. Reply in ≤200 words: the files changed, the public API you exposed, the test count and results, and any open concerns.
+"
+2026-11-17T11:19:34Z,human,human,architect,claude-opus-5-5,high,,"Commit, push, make public, then submit","once that is complete we can commit, puch and make public, we will then submit it if you are satisfied all tests are passing"

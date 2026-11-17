@@ -31,3 +31,8 @@
 ## Wrap-up (10:51Z)
 - All beads closed, including both stretch beads (tel-offset, tel-redis). Verified end to end in compose: tokenless and with a PAT, the Redis profile, and the dashboard, logs and traces.
 - Secrets scan: the real token is absent from git history and tracked files; the only `ghp_` strings are fake fixtures in the redaction tests.
+
+## Publishing (human answers)
+- Commit author email: rewrite to the GitHub no-reply address before the first push.
+- Local paths in the prompt log: leave verbatim.
+- Repository: pmaybin/telescope (existing, empty, private) → push, then make it public, then submit.

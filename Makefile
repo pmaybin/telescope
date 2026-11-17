@@ -43,6 +43,7 @@ lint: ## Run all linters and type checks
 	cd frontend && pnpm fmt:check
 	cd frontend && pnpm typecheck
 	cd frontend && pnpm gen:api:check
+	python3 scripts/export_prompt_log.py --check
 
 fmt: ## Format backend and frontend code
 	cd backend && uv run ruff check --fix

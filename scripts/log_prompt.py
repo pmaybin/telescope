@@ -12,6 +12,9 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from export_prompt_log import export  # noqa: E402
+
 LOG = Path(__file__).resolve().parent.parent / "docs" / "prompts" / "prompt-log.csv"
 COLUMNS = ["timestamp_utc", "actor", "from", "to", "model", "effort",
            "bead_id", "prompt_summary", "prompt_full"]
@@ -47,6 +50,7 @@ def main() -> None:
             w.writerow(COLUMNS)
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         w.writerow([ts, a.actor, a.src, a.dst, a.model, a.effort, a.bead, a.summary, full])
+    export()
 
 
 if __name__ == "__main__":
