@@ -171,7 +171,7 @@ An AI-assisted workflow: an architect model coordinated subagents, each owning a
 - Work tracking with beads: [.beads/](.beads/)
 
 **Time spent:** started 2026-11-17 10:29 UTC.
-Finished: 2026-11-17 10:51 UTC (about 25 minutes of wall-clock time against a 4-hour timebox; the parallel subagents did most of the implementation)
+Finished: 2026-11-17 10:51 UTC (about 22 minutes of wall-clock time against a 4-hour timebox; the parallel subagents did most of the implementation)
 
 ## Repo layout
 
