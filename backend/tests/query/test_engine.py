@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from telescope.errors import InvalidCursor
+from telescope.errors import InvalidCursor, InvalidPagination
 from telescope.models import Repo, RepoQuery, Snapshot
 from telescope.query import decode_cursor, encode_cursor, query_hash, run_query
 
@@ -348,3 +348,71 @@ def test_exact_last_page_has_no_next() -> None:
     res = run_query(s, q(limit=6))
     assert not res.page.has_next
     assert res.page.next_cursor is None
+
+
+# --------------------------------------------------------------------------- offset mode
+
+
+def _offset_data() -> Snapshot:
+    return snap([mk(i, stars=i) for i in range(1, 26)])  # 25 repos, stars desc = 25..1
+
+
+def test_offset_slices_the_sorted_list() -> None:
+    res = run_query(_offset_data(), q(offset=10, limit=5))
+    assert ids(res.items) == [15, 14, 13, 12, 11]
+    p = res.page
+    assert (p.offset, p.total, p.has_prev, p.has_next) == (10, 25, True, True)
+    assert p.next_cursor is None and p.prev_cursor is None
+    assert res.cursor_from_older_snapshot is False
+
+
+def test_offset_zero_and_last_partial_page() -> None:
+    first = run_query(_offset_data(), q(offset=0, limit=10)).page
+    assert (first.has_prev, first.has_next, first.offset) == (False, True, 0)
+    last = run_query(_offset_data(), q(offset=20, limit=10))
+    assert ids(last.items) == [5, 4, 3, 2, 1]
+    assert (last.page.has_prev, last.page.has_next) == (True, False)
+
+
+def test_offset_beyond_total_is_empty_with_prev() -> None:
+    res = run_query(_offset_data(), q(offset=500, limit=10))
+    assert res.items == []
+    assert (res.page.has_prev, res.page.has_next, res.page.total) == (True, False, 25)
+
+
+def test_cursor_mode_reports_null_offset() -> None:
+    assert run_query(_offset_data(), q(limit=5)).page.offset is None
+
+
+def test_cursor_and_offset_together_rejected() -> None:
+    cur = run_query(_offset_data(), q(limit=5)).page.next_cursor
+    with pytest.raises(InvalidPagination):
+        run_query(_offset_data(), q(offset=5, cursor=cur))
+
+
+def test_query_hash_ignores_offset() -> None:
+    assert query_hash(q(offset=40)) == query_hash(q())
+
+
+def test_offset_walk_equals_cursor_walk() -> None:
+    repos = [mk(i, stars=i % 7, name=f"n{i % 5}") for i in range(1, 38)]
+    s = snap(repos)
+    for sort in ("stars", "name"):
+        by_cursor: list[int] = []
+        cursor: str | None = None
+        while True:
+            res = run_query(s, q(sort=sort, limit=6, cursor=cursor))
+            by_cursor += ids(res.items)
+            cursor = res.page.next_cursor
+            if cursor is None:
+                break
+        by_offset: list[int] = []
+        offset = 0
+        while True:
+            res = run_query(s, q(sort=sort, limit=6, offset=offset))
+            by_offset += ids(res.items)
+            if not res.page.has_next:
+                break
+            offset += 6
+        assert by_offset == by_cursor
+        assert len(by_offset) == 37

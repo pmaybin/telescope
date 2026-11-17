@@ -52,6 +52,18 @@
             ],
             "title": "Next Cursor"
           },
+          "offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Offset of this page in offset mode; null in cursor mode.",
+            "title": "Offset"
+          },
           "prev_cursor": {
             "anyOf": [
               {
@@ -587,6 +599,26 @@
               ],
               "description": "Opaque cursor from `page.next_cursor` or `page.prev_cursor`.",
               "title": "Cursor"
+            }
+          },
+          {
+            "description": "Zero-based offset into the filtered, sorted list. Mutually exclusive with `cursor` (400 `invalid-pagination` if both are given).",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Zero-based offset into the filtered, sorted list. Mutually exclusive with `cursor` (400 `invalid-pagination` if both are given).",
+              "title": "Offset"
             }
           }
         ],

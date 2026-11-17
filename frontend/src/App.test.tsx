@@ -231,4 +231,49 @@ describe('App', () => {
     await waitFor(() => expect(seen.at(-1)?.get('sort')).toBe('stars'))
     expect(screen.getByLabelText('Sort')).toHaveValue('stars')
   })
+
+  it('offset mode sends offset, shows Page X of Y and updates the URL', async () => {
+    const seen = serve((q) =>
+      makePage({
+        page: {
+          limit: 10,
+          total: 25,
+          has_next: true,
+          has_prev: Number(q.get('offset') ?? 0) > 0,
+          next_cursor: null,
+          prev_cursor: null,
+          offset: Number(q.get('offset') ?? 0),
+        },
+      }),
+    )
+    open('?org=acme&paging=offset&limit=10')
+    await screen.findByRole('link', { name: 'guava' })
+    expect(seen.at(-1)?.get('offset')).toBe('0')
+    expect(seen.at(-1)?.has('cursor')).toBe(false)
+    expect(screen.getByText(/page 1 of 3/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Prev' })).toBeDisabled()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }))
+    await waitFor(() => expect(seen.at(-1)?.get('offset')).toBe('10'))
+    expect(window.location.search).toContain('offset=10')
+    expect(await screen.findByText(/page 2 of 3/i)).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Last' }))
+    await waitFor(() => expect(seen.at(-1)?.get('offset')).toBe('20'))
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled()
+  })
+
+  it('switching paging mode or filters resets offset', async () => {
+    const seen = serve(() => makePage())
+    open('?org=acme&paging=offset&offset=20&limit=10')
+    await screen.findByRole('link', { name: 'guava' })
+    expect(seen.at(-1)?.get('offset')).toBe('20')
+    await userEvent.selectOptions(screen.getByLabelText('Type'), 'forks')
+    await waitFor(() => expect(seen.at(-1)?.get('type')).toBe('forks'))
+    expect(seen.at(-1)?.get('offset')).toBe('0')
+    expect(window.location.search).not.toContain('offset=')
+    await userEvent.selectOptions(screen.getByLabelText('Paging'), 'cursor')
+    await waitFor(() => expect(seen.at(-1)?.has('offset')).toBe(false))
+    expect(window.location.search).not.toContain('paging=')
+  })
 })

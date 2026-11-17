@@ -19,7 +19,7 @@ Status: draft v1 (architect). `backend/openapi.json` is the source of truth once
 | `order` | `asc` \| `desc` | `desc` for stars/updated/pushed; `asc` for name | |
 | `limit` | int 1–100 | 30 | |
 | `cursor` | opaque string | unset | From `page.next_cursor` / `page.prev_cursor`. |
-| `offset` | int ≥ 0 | unset | *Stretch (tel-offset).* Mutually exclusive with `cursor` (400 if both). |
+| `offset` | int 0..100000 | unset | Offset mode. Mutually exclusive with `cursor` (400 `invalid-pagination` if both). Cursors are null in this mode. |
 
 ## Ordering semantics (see ADR-0005)
 - Primary key per `sort`, then the tiebreaker **`id` ascending** (always ascending, so the order is total and stable).
@@ -52,7 +52,8 @@ Opaque `base64url(JSON)`:
   "page": {
     "limit": 30, "total": 812,             // total = count after filters
     "has_next": true, "has_prev": false,
-    "next_cursor": "string|null", "prev_cursor": "string|null"
+    "next_cursor": "string|null", "prev_cursor": "string|null",
+    "offset": "int|null (set in offset mode, null in cursor mode)"
   },
   "snapshot": {
     "id": "string", "fetched_at": "RFC3339", "repo_count": 2731,   // count before filters

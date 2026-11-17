@@ -32,6 +32,10 @@ class InvalidCursor(TelescopeError):
     slug, status, title = "invalid-cursor", 400, "Invalid cursor"
 
 
+class InvalidPagination(TelescopeError):
+    slug, status, title = "invalid-pagination", 400, "Invalid pagination"
+
+
 class UpstreamError(TelescopeError):
     """Any failure talking to GitHub. Never cached; may be masked by serving stale data."""
 

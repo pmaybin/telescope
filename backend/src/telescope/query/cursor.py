@@ -30,7 +30,7 @@ class Cursor:
 def query_hash(query: RepoQuery) -> str:
     """Short hash of the normalised filters, sort and effective order.
 
-    `limit` and `cursor` are deliberately excluded so the page size may change
+    `limit`, `cursor` and `offset` are deliberately excluded so the page size may change
     mid-walk.
     """
     normalised = {

@@ -45,6 +45,11 @@ export interface components {
             limit: number;
             /** Next Cursor */
             next_cursor: string | null;
+            /**
+             * Offset
+             * @description Offset of this page in offset mode; null in cursor mode.
+             */
+            offset?: number | null;
             /** Prev Cursor */
             prev_cursor: string | null;
             /**
@@ -208,6 +213,8 @@ export interface operations {
                 limit?: number;
                 /** @description Opaque cursor from `page.next_cursor` or `page.prev_cursor`. */
                 cursor?: string | null;
+                /** @description Zero-based offset into the filtered, sorted list. Mutually exclusive with `cursor` (400 `invalid-pagination` if both are given). */
+                offset?: number | null;
             };
             header?: never;
             path: {

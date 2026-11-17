@@ -307,3 +307,49 @@ async def test_ttl_expiry_refetches(
     clock.advance(timedelta(minutes=5).total_seconds())
     await client.get(URL)
     assert calls(routes) == 1
+
+
+async def test_offset_mode_slices_and_reports_offset(
+    client: httpx.AsyncClient, mock: respx.MockRouter
+) -> None:
+    mock_pages(mock, 3, last_page_size=50)  # 250 repos
+    r = await client.get(URL, params={"offset": 240, "limit": 20})
+    assert r.status_code == 200
+    page = r.json()["page"]
+    assert [i["stars"] for i in r.json()["items"]] == list(range(10, 0, -1))
+    assert page["offset"] == 240
+    assert (page["has_prev"], page["has_next"]) == (True, False)
+    assert page["next_cursor"] is None and page["prev_cursor"] is None
+
+
+async def test_offset_changes_etag(client: httpx.AsyncClient, mock: respx.MockRouter) -> None:
+    mock_pages(mock, 3)
+    a = await client.get(URL, params={"offset": 0, "limit": 10})
+    b = await client.get(URL, params={"offset": 10, "limit": 10})
+    assert a.headers["etag"] != b.headers["etag"]
+    again = await client.get(
+        URL, params={"offset": 10, "limit": 10}, headers={"If-None-Match": b.headers["etag"]}
+    )
+    assert again.status_code == 304
+
+
+async def test_cursor_plus_offset_is_a_400_problem(
+    client: httpx.AsyncClient, mock: respx.MockRouter
+) -> None:
+    mock_pages(mock, 3)
+    first = await client.get(URL, params={"limit": 10})
+    cursor = first.json()["page"]["next_cursor"]
+    r = await client.get(URL, params={"limit": 10, "cursor": cursor, "offset": 10})
+    assert r.status_code == 400
+    assert r.headers["content-type"].startswith("application/problem+json")
+    body = r.json()
+    assert body["type"].endswith("/invalid-pagination")
+    assert body["title"] == "Invalid pagination"
+
+
+async def test_offset_out_of_bounds_is_rejected(
+    client: httpx.AsyncClient, mock: respx.MockRouter
+) -> None:
+    mock_pages(mock, 1)
+    assert (await client.get(URL, params={"offset": -1})).status_code == 422
+    assert (await client.get(URL, params={"offset": 100_001})).status_code == 422

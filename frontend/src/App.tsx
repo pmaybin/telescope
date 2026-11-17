@@ -21,6 +21,7 @@ const FILTER_KEYS = [
   'sort',
   'order',
   'limit',
+  'paging',
 ]
 
 function App() {
@@ -43,7 +44,15 @@ function App() {
   const order = oneOf(params.get('order'), ['asc', 'desc'] as const)
   const limitNum = Number(params.get('limit'))
   const limit = PAGE_SIZES.includes(limitNum) ? limitNum : 30
-  const cursor = params.get('cursor') || undefined
+  const paging =
+    oneOf(params.get('paging'), ['cursor', 'offset'] as const) ?? 'cursor'
+  const offsetNum = Number(params.get('offset'))
+  const offset =
+    paging === 'offset' && Number.isInteger(offsetNum) && offsetNum > 0
+      ? Math.min(offsetNum, 100_000)
+      : 0
+  const cursor =
+    paging === 'cursor' ? params.get('cursor') || undefined : undefined
 
   const minStarsNum = minStarsRaw === '' ? NaN : Number(minStarsRaw)
   const minStars =
@@ -58,6 +67,7 @@ function App() {
     order,
     limit,
     cursor,
+    offset: paging === 'offset' ? offset : undefined,
   }
 
   const { data, problem, retryAfterHeader, loading, retry } = useRepos(
@@ -107,6 +117,7 @@ function App() {
             sort={sort}
             order={order ?? ''}
             limit={String(limit)}
+            paging={paging}
             languages={languages}
             onChange={update}
           />
@@ -122,7 +133,7 @@ function App() {
               problem={problem}
               retryAfterHeader={retryAfterHeader}
               onRetry={retry}
-              onRestart={() => update({ cursor: undefined })}
+              onRestart={() => update({ cursor: undefined, offset: undefined })}
             />
           )}
 
@@ -148,8 +159,57 @@ function App() {
           )}
 
           {data && data.items.length > 0 && (
+            <RepoTable items={data.items} sort={sort} dimmed={loading} />
+          )}
+
+          {data && paging === 'offset' && data.page.total > 0 && (
+            <nav className="pager" aria-label="Pagination">
+              <button
+                type="button"
+                disabled={offset === 0}
+                onClick={() => update({ offset: undefined })}
+              >
+                First
+              </button>{' '}
+              <button
+                type="button"
+                disabled={offset === 0}
+                onClick={() =>
+                  update({ offset: String(Math.max(0, offset - limit)) })
+                }
+              >
+                Prev
+              </button>{' '}
+              <button
+                type="button"
+                disabled={offset + limit >= data.page.total}
+                onClick={() => update({ offset: String(offset + limit) })}
+              >
+                Next
+              </button>{' '}
+              <button
+                type="button"
+                disabled={offset + limit >= data.page.total}
+                onClick={() =>
+                  update({
+                    offset: String(
+                      (Math.ceil(data.page.total / limit) - 1) * limit,
+                    ),
+                  })
+                }
+              >
+                Last
+              </button>{' '}
+              <span>
+                Page {formatNumber(Math.floor(offset / limit) + 1)} of{' '}
+                {formatNumber(Math.max(1, Math.ceil(data.page.total / limit)))}{' '}
+                ({formatNumber(data.page.total)} matching in {data.org})
+              </span>
+            </nav>
+          )}
+
+          {data && paging === 'cursor' && data.items.length > 0 && (
             <>
-              <RepoTable items={data.items} sort={sort} dimmed={loading} />
               <nav className="pager" aria-label="Pagination">
                 <button
                   type="button"

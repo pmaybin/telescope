@@ -107,7 +107,14 @@ async def list_org_repos(
 
 def _etag(snapshot_id: str, query: RepoQuery, stale: bool) -> str:
     raw = "|".join(
-        [snapshot_id, query_hash(query), query.cursor or "", str(query.limit), str(stale)]
+        [
+            snapshot_id,
+            query_hash(query),
+            query.cursor or "",
+            str(query.offset),
+            str(query.limit),
+            str(stale),
+        ]
     )
     return f'W/"{hashlib.sha256(raw.encode()).hexdigest()[:16]}"'
 

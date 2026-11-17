@@ -33,3 +33,6 @@ We chose to continue rather than reject a cursor from an older snapshot: failing
 - Con: no jump-to-page and no "page X of Y". This is acceptable for a browse-and-filter list.
 - Con: cursors are opaque but not signed. Tampering gives wrong positions for that client only, and nothing is exposed that the client could not query anyway.
 - Con: sort-key changes across snapshots can still reorder rows. This is inherent to any keyset scheme on mutable data.
+
+## Update: offset implemented
+`offset` (0..100,000) is now implemented as an alternative to `cursor` (contract change authorised by tel-offset). It is mutually exclusive with `cursor`: both together give 400 `invalid-pagination`. Offset mode uses the same filter and sort and slices `[offset:offset+limit]`. `has_prev = offset > 0`, `has_next = offset+limit < total`, and both cursors are null. An offset past the end returns empty items with `has_prev` true. `page.offset` echoes the offset (null in cursor mode). `offset` is excluded from the query hash, but is part of the response ETag. The frontend picks the mode with `paging=cursor|offset` (default `cursor`) and shows "Page X of Y" with First/Prev/Next/Last in offset mode. Changing filters resets the position.

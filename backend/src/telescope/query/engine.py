@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from telescope.errors import InvalidCursor
+from telescope.errors import InvalidCursor, InvalidPagination
 from telescope.models import (
     LANGUAGE_NONE,
     PageInfo,
@@ -141,6 +141,9 @@ def run_query(snapshot: Snapshot, query: RepoQuery) -> QueryResult:
     sort, order = query.sort, query.effective_order
     qhash = query_hash(query)
 
+    if query.offset is not None and query.cursor is not None:
+        raise InvalidPagination("`offset` and `cursor` are mutually exclusive.")
+
     cursor: Cursor | None = None
     if query.cursor is not None:
         cursor = decode_cursor(query.cursor)
@@ -155,6 +158,23 @@ def run_query(snapshot: Snapshot, query: RepoQuery) -> QueryResult:
     keys = [_repo_key(r, sort, order) for r in ordered]
     total = len(ordered)
     limit = query.limit
+
+    if query.offset is not None:
+        offset = query.offset
+        items = ordered[offset : offset + limit]
+        return QueryResult(
+            items=items,
+            page=PageInfo(
+                limit=limit,
+                total=total,
+                has_next=offset + limit < total,
+                has_prev=offset > 0,
+                next_cursor=None,
+                prev_cursor=None,
+                offset=offset,
+            ),
+            cursor_from_older_snapshot=False,
+        )
 
     if cursor is None:
         start, end = 0, min(limit, total)

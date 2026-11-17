@@ -9,6 +9,7 @@ type Props = {
   sort: string
   order: string
   limit: string
+  paging: string
   languages: string[]
   onChange: (patch: Record<string, string | undefined>) => void
 }
@@ -91,6 +92,21 @@ export function Controls(p: Props) {
           <option value="">Default</option>
           <option value="asc">Ascending</option>
           <option value="desc">Descending</option>
+        </select>
+      </div>
+      <div>
+        <label htmlFor="paging">Paging</label>{' '}
+        <select
+          id="paging"
+          value={p.paging}
+          onChange={(e) =>
+            p.onChange({
+              paging: e.target.value === 'offset' ? 'offset' : undefined,
+            })
+          }
+        >
+          <option value="cursor">Cursor</option>
+          <option value="offset">Offset</option>
         </select>
       </div>
       <div>

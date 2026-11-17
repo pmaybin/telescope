@@ -19,6 +19,7 @@ ORG_PATTERN = r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$"
 LANGUAGE_NONE = "none"
 DEFAULT_LIMIT = 30
 MAX_LIMIT = 100
+MAX_OFFSET = 100_000
 
 
 # --------------------------------------------------------------------------- query
@@ -91,6 +92,17 @@ class RepoQuery(BaseModel):
             description="Opaque cursor from `page.next_cursor` or `page.prev_cursor`.",
         ),
     ] = None
+    offset: Annotated[
+        int | None,
+        Field(
+            ge=0,
+            le=MAX_OFFSET,
+            description=(
+                "Zero-based offset into the filtered, sorted list. Mutually exclusive "
+                "with `cursor` (400 `invalid-pagination` if both are given)."
+            ),
+        ),
+    ] = None
 
     @property
     def effective_order(self) -> SortOrder:
@@ -146,6 +158,9 @@ class PageInfo(BaseModel):
     has_prev: bool
     next_cursor: str | None
     prev_cursor: str | None
+    offset: int | None = Field(
+        default=None, description="Offset of this page in offset mode; null in cursor mode."
+    )
 
 
 class SnapshotInfo(BaseModel):

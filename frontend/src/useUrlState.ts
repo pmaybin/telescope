@@ -5,8 +5,8 @@ export type UrlPatch = Record<string, string | undefined>
 /**
  * The URL query string is the single source of truth for page state.
  * Updates use `history.pushState`; back/forward is handled via `popstate`.
- * Any patch that does not itself set `cursor` clears it, because a cursor is
- * only valid for the filters/sort it was issued for.
+ * Any patch that does not itself set `cursor` (or `offset`) clears it, because
+ * a position is only valid for the filters/sort it was issued for.
  */
 export function useUrlState(): {
   params: URLSearchParams
@@ -29,6 +29,7 @@ export function useUrlState(): {
       else next.set(key, value)
     }
     if (!('cursor' in patch)) next.delete('cursor')
+    if (!('offset' in patch)) next.delete('offset')
     const qs = next.toString()
     if (qs === window.location.search.replace(/^\?/, '')) return
     window.history.pushState(null, '', qs ? `?${qs}` : window.location.pathname)
