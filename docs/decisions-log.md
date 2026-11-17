@@ -13,3 +13,17 @@
 | 6 | 10:30 | Forks / `type`? | **Expose `type`, default `all`.** Return a `fork` flag. | 0002 |
 | 7 | 10:30 | Hosting / CI? | **A repo run locally for evaluation; no CI.** The spec-drift check runs as a test/make target instead. | 0010 |
 | 8 | 10:30 | Tooling? | **uv + ruff + mypy, pnpm.** | 0001 |
+
+## Architect proposals (10:34Z), defaults applied pending human objection
+
+| # | Proposal | Status | ADR |
+|---|---|---|---|
+| P1 | One upstream fetch per org, always `type=public`; `all/sources/forks` filtered locally (one quota cost per org, no private-repo leakage with a reviewer's token) | default applied | 0002 |
+| P2 | GitHub rate limit → **503** + `Retry-After` (stale data → 200 `stale:true`); a budget guard fails fast before burning quota | default applied | 0006, 0007 |
+| P3 | Keyset cursor carrying a snapshot id; on refresh, continue and flag `cursor_from_older_snapshot` | default applied | 0004 |
+| P4 | Default `sort=stars desc`; `updated` = `updated_at`; extra `pushed` sort | default applied | 0005 |
+
+## Research outcomes
+- r1 (10:35): fetch-all confirmed; google has about 30 pages at per_page=100; **unauthenticated 304s count against the limit** (observed), so ETags only save quota with a token. → ADR 0002/0003/0007
+- r2 (10:36): otel-lgtm 0.41.0; datasource UIDs prometheus/loki/tempo; dashboards mount at /otel-lgtm/grafana/conf/provisioning/dashboards/custom. → ADR 0009
+- r3 (10:36): openapi-typescript + openapi-fetch; openapi-msw for typed MSW handlers. → ADR 0010

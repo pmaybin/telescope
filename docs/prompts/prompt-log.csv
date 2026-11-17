@@ -240,3 +240,262 @@ Create a minimal, working skeleton only (no business logic). Other agents build 
 
 Finally, run `make lint` and `make test` from the repo root and make sure both pass. Reply in no more than 200 words: the files created, the versions chosen, the command results, and any deviations.
 "
+2026-11-17T10:39:24Z,architect,architect,subagent,claude-sonnet-5-5,medium,tel-ghclient,Implement tel-ghclient,"# Bead tel-ghclient: GitHub client
+**Your files:** `backend/src/telescope/github/**`, `backend/tests/github/**`, `backend/tests/fixtures/**`, and `backend/src/telescope/settings.py` (add settings only).
+
+Build `telescope.github`:
+1. `mapping.py`: `parse_repo(raw: dict[str, Any]) -> Repo`. Normalise: strip strings, `""""` → None for description, language and homepage-like fields. `license`: None if missing, and `spdx_id` ""NOASSERTION"" → None. `stars` = `stargazers_count`, `forks` = `forks_count`, `open_issues` = `open_issues_count`, `topics` default []. Datetimes are parsed and nullable.
+2. `client.py`: `class GitHubClient` with `__init__(self, http: httpx.AsyncClient, *, token: SecretStr | None, base_url: str = ""https://api.github.com"", max_retries: int = 3, backoff_base_s: float = 0.5, backoff_max_s: float = 8.0, page_concurrency: int = 4, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep, rng: random.Random | None = None, now: Callable[[], datetime] = <utc now>)`, the property `rate_limit -> RateLimitState`, and `async def fetch_org_repos(self, org: str, previous: Snapshot | None = None) -> Snapshot`.
+   - Requests: `GET {base}/orgs/{org}/repos?type=public&sort=full_name&direction=asc&per_page=100&page=N`. Headers: `Accept: application/vnd.github+json`, `X-GitHub-Api-Version: 2022-11-28`, a `User-Agent: telescope`, and `Authorization: Bearer <token>` only when there is a token.
+   - Walk: fetch page 1. Read `rel=""last""` from the `Link` header to learn N (no Link means one page). Then fetch pages 2..N **concurrently**, bounded by `page_concurrency` (a semaphore). Assemble the repos in page order. Follow `rel=""next""` as a fallback if `last` is absent but `next` is present (sequential).
+   - **Budget guard:** after page 1, if `remaining` is known and `remaining < N-1`, raise `UpstreamRateLimited(pages_needed=N, retry_after=<seconds until reset>)` *before* spending more quota.
+   - **Conditional revalidation:** if `previous` is given, send `If-None-Match` with `previous.page_etags[n]` for each page. A 304 page reuses `previous.repos[(n-1)*100 : n*100]` (pages are contiguous because the order is deterministic). If N differs from the number of pages in previous, ignore the ETags for the pages past the old count (it's simplest to do a plain fetch of them). If every page was 304, return `previous.with_fetched_at(now)` (same id). Store the new ETags in `Snapshot.page_etags`. Call `metrics.upstream_fetch(""revalidated"" if any 304 else ""full"", pages)`.
+   - Rate-limit state: update it from `x-ratelimit-limit/remaining/reset` on **every** response (reset is epoch seconds → UTC datetime) and call `metrics.github_rate_limit(...)`. `authenticated` = token present.
+   - **Error classification:**
+     - 404 → `OrgNotFound(org)`.
+     - 403/429 with `x-ratelimit-remaining: 0` → primary limit: `UpstreamRateLimited(retry_after=reset-now)`.
+     - 403/429 with `retry-after`, or a body message containing ""secondary rate limit"" → secondary: `UpstreamRateLimited(secondary=True, retry_after=retry-after or 60)`.
+     - Any other 403 → `UpstreamUnavailable`.
+     - 5xx → retry. A timeout (`httpx.TimeoutException`) → retry. A network error (`httpx.TransportError`) → retry.
+     - Retries: up to `max_retries` with exponential backoff and **full jitter** (`rng.uniform(0, min(max, base*2**attempt))`) through the injected `sleep`. When exhausted, a timeout → `UpstreamTimeout`, everything else → `UpstreamUnavailable`. Never retry 4xx.
+     - A failure on any page fails the whole fetch: no partial Snapshot, ever. Cancel the in-flight sibling pages (use `asyncio.TaskGroup`).
+   - Log each upstream call at INFO (DEBUG for 304 is fine) with `extra={""github_path"": ..., ""page"": n, ""status_code"": ..., ""duration_ms"": ..., ""ratelimit_remaining"": ...}`, and call `metrics.github_request(status, duration)`. Log retries at WARNING.
+3. `settings.py`: add `github_timeout_s: float = 10.0`, `github_max_retries: int = 3`, `github_page_concurrency: int = 4`.
+4. Tests (`tests/github/`) with **respx**, plus a small fixture builder (e.g. `tests/fixtures/github.py`: `make_repo_json(id, name, **overrides)` and a helper to mock N pages with correct `Link` headers). At least:
+   - Multi-page walk returns all repos in order.
+   - Single page with no Link header.
+   - Normalisation (empty strings → None, NOASSERTION, missing license).
+   - Token present → Authorization header sent; absent → not sent.
+   - 404 → OrgNotFound.
+   - Primary rate limit → UpstreamRateLimited with the right retry_after.
+   - Secondary limit (retry-after header).
+   - Budget guard trips without fetching page 2.
+   - 5xx then 200 → success, with the retries counted and `sleep` called with jittered values.
+   - 5xx forever → UpstreamUnavailable.
+   - Timeout forever → UpstreamTimeout.
+   - Failure on page 3 of 5 → raises and no snapshot returned.
+   - Revalidation where all pages are 304 → same snapshot id, If-None-Match sent.
+   - Revalidation with one page changed → new snapshot with that page replaced.
+   - Rate-limit state updated from headers.
+## Shared context (every build agent)
+- Repo: /home/paul/.t3/projects/telescope. This is a timeboxed senior take-home: ""telescope"" serves `GET /api/orgs/{org}/repos` (FastAPI, Python 3.12, uv) to a React+TS frontend (Vite, pnpm). Read `docs/design/api-contract.md` (the intended semantics), `backend/src/telescope/models.py` (contract and domain types: `Repo`, `Snapshot`, `RateLimitState`, `RepoQuery`…), `backend/src/telescope/errors.py` (domain exceptions) and `backend/src/telescope/observability/metrics.py` (the metrics facade: call these functions and don't import OTel elsewhere). Research notes are in `docs/research/` if relevant.
+- **Do not change** `models.py`, `errors.py` or `openapi.json`. If you believe the contract needs a change, stop and say so in your reply instead.
+- Tools: run commands via `mise exec -- …` (pnpm is only on PATH through mise). Beads: `env -u BEADS_DIR bd …` (a global env var points elsewhere). Start with `env -u BEADS_DIR bd update <bead> --status in_progress`. **Don't close the bead and don't git commit**: the architect reviews and commits. Other agents are working in parallel on other directories: **only touch the files listed as yours**. Don't run `uv add`/`pnpm add` unless your brief allows it.
+- Quality bar: mypy --strict clean, ruff clean, and tests that are meaningful, fast and **parallel-safe** (`pytest -n auto`: no shared mutable module state, no real network, no real sleeps; inject clocks and sleep functions). **Never call the real GitHub API in tests**; use `respx`. Logging: `logger = logging.getLogger(__name__)`, structured fields via `extra={...}`, and never log tokens or the Authorization header.
+- Before replying, run `cd backend && uv run pytest && uv run ruff check && uv run ruff format --check && uv run mypy src` (or the frontend equivalents) and make them pass. Reply in ≤200 words: the files changed, the public API you exposed, the test count and results, and any open concerns.
+"
+2026-11-17T10:39:25Z,architect,architect,subagent,claude-sonnet-5-5,medium,tel-cache,Implement tel-cache,"# Bead tel-cache: snapshot cache
+**Your files:** `backend/src/telescope/cache/**`, `backend/tests/cache/**`.
+
+Build `telescope.cache`, a cache of complete `Snapshot`s per org, kept behind an interface so Redis can be swapped in later:
+1. `store.py`: `class SnapshotStore(Protocol)` with `async get(key: str) -> Snapshot | None`, `async set(key: str, snapshot: Snapshot) -> None` and `async delete(key: str) -> None`. Plus `InMemorySnapshotStore`, a dict with an optional `max_entries` LRU bound (default 256).
+2. `service.py`: `Fetcher = Callable[[str, Snapshot | None], Awaitable[Snapshot]]` (org, previous → fresh snapshot; it raises the `telescope.errors` types). A `@dataclass(frozen=True) CachedSnapshot(snapshot: Snapshot, stale: bool)`. Then `class SnapshotService.__init__(self, store, fetcher, *, ttl_s: float = 600, stale_while_revalidate_s: float = 60, max_stale_s: float = 86400, negative_ttl_s: float = 60, now: Callable[[], datetime] = utc now)` and `async def get(self, org: str) -> CachedSnapshot`. The key is `org.lower()`. Age is measured from `snapshot.fetched_at`.
+   - **Fresh** (age < ttl) → return it, `stale=False`; metric `hit`.
+   - **Missing** → fetch (single-flight), store, return; metric `miss`. Errors propagate.
+   - **SWR window** (ttl ≤ age < ttl+swr) → return the cached one immediately (`stale=False`; it is still within the tolerated window) and kick off **one** background refresh (single-flight). Background errors are logged at WARNING, never raised. Keep a reference to the task, and expose `async aclose()` to cancel/await background tasks.
+   - **Expired** (age ≥ ttl+swr) → refresh synchronously (single-flight), passing `previous=cached` so the fetcher can revalidate with ETags. On an `UpstreamError` (any subclass), if age < max_stale → return the cached one with `stale=True` (metric `stale`) and log a WARNING. Otherwise re-raise. `OrgNotFound` is not an UpstreamError: delete the entry and re-raise.
+   - **Single-flight:** concurrent `get()`s for the same org share one in-flight fetch (an `asyncio.Future`/Task per key). The error is propagated to every waiter, and the in-flight entry is always cleaned up.
+   - **Negative cache:** remember `OrgNotFound` per org for `negative_ttl_s` (in memory is fine) and re-raise it without calling the fetcher (metric `negative_hit`).
+   - Never store anything except what the fetcher returned successfully (partial data is impossible by construction, but assert that no error path stores anything).
+   - Metrics through `telescope.observability.metrics.cache_lookup(...)`.
+3. Tests (`tests/cache/`): use fake fetchers (async functions that count calls, can block on an `asyncio.Event`, or raise) and an injected clock. Cover: miss→hit; TTL expiry → refetch with `previous` passed; SWR returns immediately and refreshes once in the background; 10 concurrent gets → 1 fetch; concurrent gets all receive the fetch error; expired + upstream error → stale=True; beyond max_stale → raises; negative cache hit; LRU eviction; nothing is stored on error.
+## Shared context (every build agent)
+- Repo: /home/paul/.t3/projects/telescope. This is a timeboxed senior take-home: ""telescope"" serves `GET /api/orgs/{org}/repos` (FastAPI, Python 3.12, uv) to a React+TS frontend (Vite, pnpm). Read `docs/design/api-contract.md` (the intended semantics), `backend/src/telescope/models.py` (contract and domain types: `Repo`, `Snapshot`, `RateLimitState`, `RepoQuery`…), `backend/src/telescope/errors.py` (domain exceptions) and `backend/src/telescope/observability/metrics.py` (the metrics facade: call these functions and don't import OTel elsewhere). Research notes are in `docs/research/` if relevant.
+- **Do not change** `models.py`, `errors.py` or `openapi.json`. If you believe the contract needs a change, stop and say so in your reply instead.
+- Tools: run commands via `mise exec -- …` (pnpm is only on PATH through mise). Beads: `env -u BEADS_DIR bd …` (a global env var points elsewhere). Start with `env -u BEADS_DIR bd update <bead> --status in_progress`. **Don't close the bead and don't git commit**: the architect reviews and commits. Other agents are working in parallel on other directories: **only touch the files listed as yours**. Don't run `uv add`/`pnpm add` unless your brief allows it.
+- Quality bar: mypy --strict clean, ruff clean, and tests that are meaningful, fast and **parallel-safe** (`pytest -n auto`: no shared mutable module state, no real network, no real sleeps; inject clocks and sleep functions). **Never call the real GitHub API in tests**; use `respx`. Logging: `logger = logging.getLogger(__name__)`, structured fields via `extra={...}`, and never log tokens or the Authorization header.
+- Before replying, run `cd backend && uv run pytest && uv run ruff check && uv run ruff format --check && uv run mypy src` (or the frontend equivalents) and make them pass. Reply in ≤200 words: the files changed, the public API you exposed, the test count and results, and any open concerns.
+"
+2026-11-17T10:39:25Z,architect,architect,subagent,claude-sonnet-5-5,medium,tel-query,Implement tel-query,"# Bead tel-query: query engine (filter, sort, cursor pagination)
+**Your files:** `backend/src/telescope/query/**`, `backend/tests/query/**`. No new dependencies (use pytest parametrize and a seeded `random` for property-style checks).
+
+Build `telescope.query`, made of **pure functions** with no I/O:
+1. `engine.py`:
+   - `@dataclass(frozen=True) QueryResult(items: list[Repo], page: PageInfo, cursor_from_older_snapshot: bool)`.
+   - `def run_query(snapshot: Snapshot, query: RepoQuery) -> QueryResult`.
+   - **Filters:**
+     - `language`: case-insensitive equality on `repo.language`, where `""none""` (case-insensitive) matches `language is None`.
+     - `min_stars`: `stars >= n`.
+     - `archived`: equality when set.
+     - `type`: `sources` → `not fork`, `forks` → `fork`, `all` → no filter.
+   - **Sort:** stars → `stars`; updated → `updated_at`; pushed → `pushed_at`; name → `name.casefold()`. Apply `query.effective_order`. **Nulls last regardless of direction.** The tiebreaker is **`id` ascending, always**. Implement it as a key function producing a comparable tuple, e.g. `(is_null, directed_value, id)`. For desc on non-numeric values, either sort with a two-pass stable sort or use a wrapper with inverted comparison; make it correct and simple, not clever.
+   - `total` is the filtered count.
+2. `cursor.py`: an opaque cursor, `base64url(json)` without padding, with the fields `{""v"":1,""q"":<query hash>,""s"":<snapshot id>,""k"":[<sort value as JSON-safe: int, ISO string or null>, <id>],""d"":""next""|""prev""}`.
+   - `query_hash(query)` is a short sha256 over the normalised filters + sort + effective order (+ limit is NOT included, so a client may change the page size mid-way).
+   - `encode_cursor`/`decode_cursor` raise `InvalidCursor` on bad base64, bad JSON, the wrong version or the wrong shape.
+3. **Keyset pagination** in `run_query`:
+   - With no cursor → the first `limit` items.
+   - `d=next` → items strictly *after* the key position in the ordering. `d=prev` → the `limit` items strictly *before* the key, in forward order.
+   - Locate the key position by comparing the sort-key tuple (bisect over the sorted list's keys), **not** by searching for the id, so it works even if that repo disappeared from a newer snapshot.
+   - `q` mismatch → `InvalidCursor(""cursor does not match the current filters/sort"")`.
+   - `s` ≠ snapshot.id → still serve, with `cursor_from_older_snapshot=True`.
+   - `next_cursor` encodes the last item's key (d=next) when more items follow. `prev_cursor` encodes the first item's key (d=prev) when items precede it. Set `has_next`/`has_prev` accordingly. An empty result gives null cursors.
+   - Cache the sorted list per `(snapshot.id, sort, order, filters)` in a small bounded `functools.lru_cache`-style helper **only if** it's simple and parallel-safe. Optional.
+4. Tests (`tests/query/`): each filter, including `language=none` and case-insensitivity; each sort, both directions; nulls last in both directions (build repos with `pushed_at=None`); a stable tiebreak on equal stars; walking forward through all pages with cursors yields every filtered item exactly once in order (seeded random dataset, several limits); walking backward from the end mirrors it; a cursor with different filters → InvalidCursor; garbage cursor → InvalidCursor; a cursor from an older snapshot is still served and flagged; the key item was deleted in the new snapshot → continues correctly; empty results.
+## Shared context (every build agent)
+- Repo: /home/paul/.t3/projects/telescope. This is a timeboxed senior take-home: ""telescope"" serves `GET /api/orgs/{org}/repos` (FastAPI, Python 3.12, uv) to a React+TS frontend (Vite, pnpm). Read `docs/design/api-contract.md` (the intended semantics), `backend/src/telescope/models.py` (contract and domain types: `Repo`, `Snapshot`, `RateLimitState`, `RepoQuery`…), `backend/src/telescope/errors.py` (domain exceptions) and `backend/src/telescope/observability/metrics.py` (the metrics facade: call these functions and don't import OTel elsewhere). Research notes are in `docs/research/` if relevant.
+- **Do not change** `models.py`, `errors.py` or `openapi.json`. If you believe the contract needs a change, stop and say so in your reply instead.
+- Tools: run commands via `mise exec -- …` (pnpm is only on PATH through mise). Beads: `env -u BEADS_DIR bd …` (a global env var points elsewhere). Start with `env -u BEADS_DIR bd update <bead> --status in_progress`. **Don't close the bead and don't git commit**: the architect reviews and commits. Other agents are working in parallel on other directories: **only touch the files listed as yours**. Don't run `uv add`/`pnpm add` unless your brief allows it.
+- Quality bar: mypy --strict clean, ruff clean, and tests that are meaningful, fast and **parallel-safe** (`pytest -n auto`: no shared mutable module state, no real network, no real sleeps; inject clocks and sleep functions). **Never call the real GitHub API in tests**; use `respx`. Logging: `logger = logging.getLogger(__name__)`, structured fields via `extra={...}`, and never log tokens or the Authorization header.
+- Before replying, run `cd backend && uv run pytest && uv run ruff check && uv run ruff format --check && uv run mypy src` (or the frontend equivalents) and make them pass. Reply in ≤200 words: the files changed, the public API you exposed, the test count and results, and any open concerns.
+"
+2026-11-17T10:39:25Z,architect,architect,subagent,claude-sonnet-5-5,medium,tel-obs,Implement tel-obs,"# Bead tel-obs: logging, tracing, metrics
+**Your files:** `backend/src/telescope/observability/**` (implement `metrics.py` behind its existing function signatures: don't rename them), `backend/src/telescope/main.py` (add the setup call and middleware only), `backend/tests/observability/**`, and `backend/pyproject.toml` + `uv.lock` (**you're the only agent allowed to `uv add`** right now; run `cd backend && uv add …`).
+
+Read `docs/research/otel-lgtm.md` first. Then:
+1. Deps: `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-http`, `opentelemetry-instrumentation-fastapi`, `opentelemetry-instrumentation-httpx`, `opentelemetry-instrumentation-logging` (pin compatible versions per the research), and `python-json-logger`.
+2. `observability/logging.py`: `configure_logging(level: str, *, token: str | None)`. It sets up root JSON logs to stdout (python-json-logger) with the fields `timestamp` (RFC3339 UTC), `level`, `logger`, `message`, `request_id`, `trace_id`, `span_id`, and any `extra`. Route uvicorn's loggers through it, and disable uvicorn's access log (we emit our own). A **redaction filter** replaces the token value (if set) and any `Authorization: …`/`Bearer …` value with `[REDACTED]` in the message, the args and the extras. It must be idempotent (safe to call twice, e.g. in tests).
+3. `observability/context.py`: a `request_id` ContextVar. `observability/middleware.py`: a pure-ASGI (or Starlette) middleware that takes `X-Request-ID` from the request if it is valid (≤128 chars, `[A-Za-z0-9._-]`), otherwise generates a uuid4 hex. It sets the contextvar, echoes `X-Request-ID` on the response, and logs one access line per request: `http.request` at INFO with method, path, route, status_code, duration_ms and client. `/healthz` is logged at DEBUG.
+4. `observability/otel.py`: `configure_otel(app, settings)`. It is a **no-op** unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set and `OTEL_SDK_DISABLED` is not ""true"". It sets up the Resource (`service.name` from `OTEL_SERVICE_NAME`, default `telescope-api`), the TracerProvider with a BatchSpanProcessor and OTLP HTTP exporter, a MeterProvider with a periodic OTLP exporter (export interval 10s), and a LoggerProvider plus OTel `LoggingHandler` attached to the root logger so logs reach Loki. It instruments FastAPI (exclude `/healthz`) and httpx. Recommend `OTEL_SEMCONV_STABILITY_OPT_IN=http` in docs/compose; don't hard-set it in code. Expose `shutdown_otel()` for the app lifespan.
+5. `metrics.py`: implement the facade with the OTel Meter API (`get_meter(""telescope"")`): counters, a histogram (unit `s`) and **observable gauges** reading the last values recorded in a small thread-safe holder. Use units that don't add Prometheus suffixes (e.g. `{request}`, `{lookup}`, `{fetch}`) so the names match the docstring exactly. When no MeterProvider is configured, the global no-op provider makes these free. Lazily create the instruments on first use or in `configure()`, either way, without breaking the existing no-op signatures.
+6. `main.py`: in `create_app()`, call `configure_logging(...)` from Settings, add the request-id middleware, and call `configure_otel(app, settings)`. Keep `create_app()` side-effect-safe for tests: no exporters without the env var. Don't touch the route module.
+7. Tests: the JSON log line contains `trace_id` inside an active span; the token value never appears in output (log a message with the token in args and in extras, and an `Authorization` header dict); X-Request-ID is generated and echoed; a valid incoming id is propagated and an invalid one replaced; `configure_otel` is a no-op without the env var; the metrics facade functions don't raise without a provider. Make logging tests parallel-safe (use a handler on a StringIO, or `caplog`).
+## Shared context (every build agent)
+- Repo: /home/paul/.t3/projects/telescope. This is a timeboxed senior take-home: ""telescope"" serves `GET /api/orgs/{org}/repos` (FastAPI, Python 3.12, uv) to a React+TS frontend (Vite, pnpm). Read `docs/design/api-contract.md` (the intended semantics), `backend/src/telescope/models.py` (contract and domain types: `Repo`, `Snapshot`, `RateLimitState`, `RepoQuery`…), `backend/src/telescope/errors.py` (domain exceptions) and `backend/src/telescope/observability/metrics.py` (the metrics facade: call these functions and don't import OTel elsewhere). Research notes are in `docs/research/` if relevant.
+- **Do not change** `models.py`, `errors.py` or `openapi.json`. If you believe the contract needs a change, stop and say so in your reply instead.
+- Tools: run commands via `mise exec -- …` (pnpm is only on PATH through mise). Beads: `env -u BEADS_DIR bd …` (a global env var points elsewhere). Start with `env -u BEADS_DIR bd update <bead> --status in_progress`. **Don't close the bead and don't git commit**: the architect reviews and commits. Other agents are working in parallel on other directories: **only touch the files listed as yours**. Don't run `uv add`/`pnpm add` unless your brief allows it.
+- Quality bar: mypy --strict clean, ruff clean, and tests that are meaningful, fast and **parallel-safe** (`pytest -n auto`: no shared mutable module state, no real network, no real sleeps; inject clocks and sleep functions). **Never call the real GitHub API in tests**; use `respx`. Logging: `logger = logging.getLogger(__name__)`, structured fields via `extra={...}`, and never log tokens or the Authorization header.
+- Before replying, run `cd backend && uv run pytest && uv run ruff check && uv run ruff format --check && uv run mypy src` (or the frontend equivalents) and make them pass. Reply in ≤200 words: the files changed, the public API you exposed, the test count and results, and any open concerns.
+"
+2026-11-17T10:39:25Z,architect,architect,subagent,claude-sonnet-5-5,medium,tel-infra,Implement tel-infra,"# Bead tel-infra: Docker, Compose, LGTM, dashboard
+**Your files:** `infra/**` (compose, Grafana provisioning, dashboard JSON), `backend/Dockerfile`, `backend/.dockerignore`, `frontend/Dockerfile`, `frontend/.dockerignore`, `frontend/nginx.conf`. Don't edit the Makefile (it already calls `docker compose -f infra/docker-compose.yml [--env-file .env] up -d --build | down | logs -f`). Paths in compose are relative to `infra/`.
+
+Read `docs/research/otel-lgtm.md` first.
+1. `backend/Dockerfile`: multi-stage build with the official `ghcr.io/astral-sh/uv` binary on `python:3.12-slim`, `uv sync --frozen --no-dev` (layer-cached on pyproject.toml/uv.lock), a non-root user, `CMD uvicorn telescope.main:app --host 0.0.0.0 --port 8000 --no-access-log`, and a HEALTHCHECK hitting `/healthz` (use python, since curl may be absent).
+2. `frontend/Dockerfile`: build on node:22-slim with corepack/pnpm (use the version in package.json `packageManager`) and `pnpm install --frozen-lockfile && pnpm build`, then serve with `nginx:alpine`. `nginx.conf` serves the SPA with `try_files` fallback and proxies `/api/` to `http://api:8000`, passing X-Request-ID.
+3. `infra/docker-compose.yml`, with services:
+   - `lgtm`: `grafana/otel-lgtm:0.41.0`, ports 3000 (Grafana), 4317 and 4318 published, a healthcheck, and the provisioning mounts below.
+   - `api`: build `../backend`. Port 8000. `GITHUB_TOKEN: ${GITHUB_TOKEN:-}`, `CACHE_TTL_SECONDS`, `LOG_LEVEL`, `OTEL_SERVICE_NAME=telescope-api`, `OTEL_EXPORTER_OTLP_ENDPOINT=http://lgtm:4318`, `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` and `OTEL_SEMCONV_STABILITY_OPT_IN=http`. Depends on lgtm being healthy.
+   - `web`: build `../frontend`. Port `8080:80`. Depends on api.
+   - Add a commented-out `redis` service under a `redis` profile (a placeholder for a stretch bead).
+   It must work with **no `.env` file** (tokenless) and with one.
+4. Grafana provisioning: a dashboard provider YAML and `infra/grafana/dashboards/telescope.json`, mounted at the paths from the research. Use the datasource UIDs `prometheus`, `loki` and `tempo`. Panels:
+   - **HTTP:** request rate by route/status (`http_server_request_duration_seconds_count`), p50/p95 latency (histogram_quantile on `_bucket`), and 5xx error ratio.
+   - **Cache:** hit ratio from `telescope_cache_lookups_total{result}`, and lookups by result.
+   - **GitHub:** calls by status from `telescope_github_requests_total`, upstream latency p95 from `telescope_github_request_duration_seconds_bucket`, a stat plus time series of `telescope_github_ratelimit_remaining` (with `telescope_github_ratelimit_limit`), and fetches by outcome from `telescope_upstream_fetches_total`.
+   - **Logs:** a Loki logs panel `{service_name=""telescope-api""}`, plus an error logs panel.
+   - **Traces:** a Tempo search/table panel for service `telescope-api`.
+   Filter Prometheus queries by `service_name=""telescope-api""` where that label exists (or `job=~"".*telescope-api""`; check the research notes on which label applies). Refresh 10s, default range 30m.
+5. `infra/README.md`: services, ports, URLs (Grafana http://localhost:3000, web http://localhost:8080, api http://localhost:8000/docs), where to find the dashboard, and how the token flows (.env → compose env → app; in production a secrets manager such as Doppler, 1Password or AWS SM injects env vars instead).
+6. Verify: `docker compose -f infra/docker-compose.yml config` passes. Run `make up` from the repo root, then wait for health. Check `curl localhost:8000/healthz`, `curl localhost:8080/` and `curl localhost:8080/api/orgs/x/repos` (it currently returns 501, which is expected: the route is a stub owned by another bead). Check the dashboard is provisioned via `curl -s localhost:3000/api/search?query=Telescope`. Then `make down`. Report the image sizes and anything flaky. Don't hit GitHub.
+## Shared context (every build agent)
+- Repo: /home/paul/.t3/projects/telescope. This is a timeboxed senior take-home: ""telescope"" serves `GET /api/orgs/{org}/repos` (FastAPI, Python 3.12, uv) to a React+TS frontend (Vite, pnpm). Read `docs/design/api-contract.md` (the intended semantics), `backend/src/telescope/models.py` (contract and domain types: `Repo`, `Snapshot`, `RateLimitState`, `RepoQuery`…), `backend/src/telescope/errors.py` (domain exceptions) and `backend/src/telescope/observability/metrics.py` (the metrics facade: call these functions and don't import OTel elsewhere). Research notes are in `docs/research/` if relevant.
+- **Do not change** `models.py`, `errors.py` or `openapi.json`. If you believe the contract needs a change, stop and say so in your reply instead.
+- Tools: run commands via `mise exec -- …` (pnpm is only on PATH through mise). Beads: `env -u BEADS_DIR bd …` (a global env var points elsewhere). Start with `env -u BEADS_DIR bd update <bead> --status in_progress`. **Don't close the bead and don't git commit**: the architect reviews and commits. Other agents are working in parallel on other directories: **only touch the files listed as yours**. Don't run `uv add`/`pnpm add` unless your brief allows it.
+- Quality bar: mypy --strict clean, ruff clean, and tests that are meaningful, fast and **parallel-safe** (`pytest -n auto`: no shared mutable module state, no real network, no real sleeps; inject clocks and sleep functions). **Never call the real GitHub API in tests**; use `respx`. Logging: `logger = logging.getLogger(__name__)`, structured fields via `extra={...}`, and never log tokens or the Authorization header.
+- Before replying, run `cd backend && uv run pytest && uv run ruff check && uv run ruff format --check && uv run mypy src` (or the frontend equivalents) and make them pass. Reply in ≤200 words: the files changed, the public API you exposed, the test count and results, and any open concerns.
+"
+2026-11-17T10:39:25Z,architect,architect,subagent,claude-sonnet-5-5,medium,tel-fe,Implement tel-fe,"# Bead tel-fe: frontend
+**Your files:** `frontend/src/**` except `src/api/schema.d.ts` (generated, don't edit; regenerate with `pnpm gen:api` if needed), plus `frontend/README.md`. You may `pnpm add` in `frontend/` if really needed, but prefer none (no router, no state or query libraries: React state plus a small hook is enough). Already available: `openapi-fetch`, `openapi-msw`, `msw` v3 (ESM, `onUnhandledRequest` renamed to `onUnhandledFrame`; check docs/research/codegen-and-frontend-testing.md), vitest, @testing-library/react + user-event + jest-dom, jsdom.
+
+Use `src/api/client.ts` (the typed `api` client and its types) to call **only our backend**: `api.GET(""/api/orgs/{org}/repos"", { params: { path: { org }, query } })`. Read `docs/design/api-contract.md` for the semantics.
+
+Build one page (plain, functional, readable CSS; styling isn't assessed):
+1. **URL is the state.** `org`, `language`, `min_stars`, `archived`, `type`, `sort`, `order`, `limit` and `cursor` live in the query string. Write a `useUrlState` hook over `URLSearchParams` + `history.pushState` + `popstate`. Changing any filter, sort or limit clears `cursor`. Back/forward works, and views are shareable.
+2. **Org form:** a text input plus a ""Load"" submit button (only fetch on submit or when the URL has an org, not on every keystroke). Validate the GitHub login pattern client-side.
+3. **Controls:**
+   - Language: a text input (debounced ~300ms, or applied on blur/Enter), with a hint that `none` means no language. A `<datalist>` of languages seen in the current results is a nice touch.
+   - Min stars: number input.
+   - Archived: select of any/yes/no.
+   - Type: all/sources/forks.
+   - Sort: stars/updated/pushed/name.
+   - Order: asc/desc, or ""default"".
+   - Page size: 10/30/50/100.
+4. **Table:** name (link to html_url, `target=_blank rel=noreferrer`), description (show an em dash or ""No description"" in muted text for null), language (""—"" for null), stars (formatted with `Intl.NumberFormat`), and last updated (relative time like ""3 days ago"" with an absolute `title` tooltip; respect the current sort, so show `pushed_at` when sort=pushed, otherwise `updated_at`). Add badges for archived and fork.
+5. **Pagination:** Prev/Next buttons using `page.prev_cursor`/`page.next_cursor` (disabled when has_prev/has_next is false), plus ""Showing N of total matching (repo_count in org)"".
+6. **States** (clear and distinct; use `role=""status""`/`role=""alert""`):
+   - Initial: no org, prompt to enter one.
+   - Loading: keep the previous rows dimmed if there are any, and show ""Loading… (first load of a large org can take a few seconds)"".
+   - Empty: ""No repositories match these filters"", with a ""clear filters"" button.
+   - Error: 404 → ""Organisation not found"". 400 invalid-cursor → a message plus a ""restart from first page"" button. 5xx → upstream unavailable or timeout, with a Retry button.
+   - **Rate-limited:** 503 with type ending `upstream-rate-limited` → explain the GitHub limit, show when it resets (from `retry_after` or `Retry-After`), and suggest adding a token.
+   - Banners: `snapshot.stale` → ""Showing cached data from <fetched_at>; GitHub is currently unavailable"". `cursor_from_older_snapshot` → ""Data refreshed while paging; order may have shifted"".
+   - Footer: GitHub rate limit `remaining/limit` and authenticated yes/no from `rate_limit`.
+   Abort in-flight requests (AbortController) when the params change, to avoid races.
+7. **Tests** (Vitest + MSW via `openapi-msw` typed handlers on `src/api/schema.d.ts`; put shared fixtures/handlers in `src/test/`):
+   - Renders rows after load.
+   - Empty state.
+   - 404 state.
+   - Rate-limited state shows the reset info.
+   - Clicking Next sends the `cursor` and updates the URL.
+   - Changing a filter updates the URL and drops the cursor.
+   - Null description/language render placeholders.
+   - The stale banner shows.
+   Assert the request query params the handler received. Keep the tests isolated (reset the URL and handlers between tests).
+8. Make sure `pnpm test`, `pnpm lint`, `pnpm typecheck`, `pnpm fmt:check` and `pnpm build` pass. Write a short `frontend/README.md` (structure, scripts, how the client is generated, testing approach).
+## Shared context (every build agent)
+- Repo: /home/paul/.t3/projects/telescope. This is a timeboxed senior take-home: ""telescope"" serves `GET /api/orgs/{org}/repos` (FastAPI, Python 3.12, uv) to a React+TS frontend (Vite, pnpm). Read `docs/design/api-contract.md` (the intended semantics), `backend/src/telescope/models.py` (contract and domain types: `Repo`, `Snapshot`, `RateLimitState`, `RepoQuery`…), `backend/src/telescope/errors.py` (domain exceptions) and `backend/src/telescope/observability/metrics.py` (the metrics facade: call these functions and don't import OTel elsewhere). Research notes are in `docs/research/` if relevant.
+- **Do not change** `models.py`, `errors.py` or `openapi.json`. If you believe the contract needs a change, stop and say so in your reply instead.
+- Tools: run commands via `mise exec -- …` (pnpm is only on PATH through mise). Beads: `env -u BEADS_DIR bd …` (a global env var points elsewhere). Start with `env -u BEADS_DIR bd update <bead> --status in_progress`. **Don't close the bead and don't git commit**: the architect reviews and commits. Other agents are working in parallel on other directories: **only touch the files listed as yours**. Don't run `uv add`/`pnpm add` unless your brief allows it.
+- Quality bar: mypy --strict clean, ruff clean, and tests that are meaningful, fast and **parallel-safe** (`pytest -n auto`: no shared mutable module state, no real network, no real sleeps; inject clocks and sleep functions). **Never call the real GitHub API in tests**; use `respx`. Logging: `logger = logging.getLogger(__name__)`, structured fields via `extra={...}`, and never log tokens or the Authorization header.
+- Before replying, run `cd backend && uv run pytest && uv run ruff check && uv run ruff format --check && uv run mypy src` (or the frontend equivalents) and make them pass. Reply in ≤200 words: the files changed, the public API you exposed, the test count and results, and any open concerns.
+"
+2026-11-17T10:39:25Z,architect,architect,subagent,claude-sonnet-5-5,medium,tel-adr,Implement tel-adr,"# Bead tel-adr: write the ADRs
+**Your files:** `docs/adr/**` only.
+
+Read `docs/design/api-contract.md`, `docs/decisions-log.md`, `docs/research/*.md`, `backend/src/telescope/models.py`, `backend/src/telescope/errors.py`, `backend/src/telescope/observability/metrics.py`, the `Makefile` and `mise.toml`, and the bead briefs in `/tmp/tel-prompts/{ghclient,cache,query,obs,infra,fe}.md` (they contain design decisions already made). Write concise MADR-style ADRs, `docs/adr/NNNN-kebab-title.md`, each with Status (Accepted), Date (2026-11-17), Context, Options considered (with pros/cons), Decision, and Consequences. Cite the research notes and GitHub docs links where relevant. Also write a `docs/adr/README.md` index. Aim for ~40–90 lines each; be specific, not generic. The required set and numbering (the decisions log already references these numbers):
+- 0001 Architecture, repo layout and tooling: monorepo backend/frontend/infra/docs; FastAPI + httpx + Pydantic; React + Vite; uv/ruff/mypy, pnpm; Makefile as the source of truth with thin mise aliases; no CI because it's evaluated locally, with drift and lint checks as make targets.
+- 0002 GitHub data acquisition: fetch-all-then-filter vs pass-through vs Search API vs GraphQL. Always `type=public` with `sort=full_name`; `type` filtered locally; bounded concurrent page fetch (4) vs serial (GitHub's guidance is to prefer serial: note the trade-off).
+- 0003 Caching: the menu (in-process TTL/LRU, Redis, ETag conditional requests, SWR, serve-stale-on-error, single-flight, HTTP caching headers, negative caching). Chosen: an in-memory store behind the `SnapshotStore` interface, TTL 600s + SWR 60s + max-stale 24h, single-flight, per-page ETag revalidation, a 60s negative cache for 404, and `ETag`/`Cache-Control: private, max-age=60` on our responses. Redis is a stretch. Note the research finding: unauthenticated 304s still count against the limit, so ETags only save quota with a token.
+- 0004 Pagination: offset vs page vs cursor. Chosen: keyset cursor by default (the human's preference); page/per_page cut for time; offset is a later stretch. The cursor format, snapshot id (a content hash), query hash binding, behaviour on snapshot change, and consistency trade-offs per mode.
+- 0005 Null/missing-data semantics: empty → null normalisation, NOASSERTION, nulls last regardless of direction, the id tiebreaker, case-insensitive language with the reserved `none`, and name casefold.
+- 0006 Error handling: RFC 9457 problem+json, the status mapping table, retries with backoff and full jitter (only 5xx/timeouts/network), no partial caching, serve stale. Why 503 rather than 429 for upstream rate limits.
+- 0007 Rate limits with and without a token: 60 vs 5,000; google is ~30 pages, so tokenless allows about 2 full fetches per hour; the budget guard; exposing rate-limit state in the response; secondary limits.
+- 0008 Secrets: `.env` (git-ignored) plus `.env.example`; SecretStr; log redaction; production via Doppler / 1Password Connect / AWS Secrets Manager injecting env vars; a fine-grained PAT with public read-only scope.
+- 0009 Observability: OTel → grafana/otel-lgtm; JSON logs with trace/span ids and request ids; the metric names; the dashboard; no browser OTel.
+- 0010 API contract and client codegen: FastAPI-generated openapi.json committed at the repo root; openapi-typescript + openapi-fetch (vs orval/hey-api); problem+json content-type post-processing; the drift checks (pytest + `pnpm gen:api:check` in `make lint`).
+- 0011 Test strategy and parallelism: pytest-xdist `-n auto`, respx (the real API is never called), injected clock/sleep/rng, pure query engine tests with property-style walks, Vitest + MSW via openapi-msw, and `make test` running both suites concurrently; Schemathesis as an optional extra.
+Don't run code. Reply in ≤150 words with the list of files and any inconsistencies you noticed between the documents.
+## Shared context (every build agent)
+- Repo: /home/paul/.t3/projects/telescope. This is a timeboxed senior take-home: ""telescope"" serves `GET /api/orgs/{org}/repos` (FastAPI, Python 3.12, uv) to a React+TS frontend (Vite, pnpm). Read `docs/design/api-contract.md` (the intended semantics), `backend/src/telescope/models.py` (contract and domain types: `Repo`, `Snapshot`, `RateLimitState`, `RepoQuery`…), `backend/src/telescope/errors.py` (domain exceptions) and `backend/src/telescope/observability/metrics.py` (the metrics facade: call these functions and don't import OTel elsewhere). Research notes are in `docs/research/` if relevant.
+- **Do not change** `models.py`, `errors.py` or `openapi.json`. If you believe the contract needs a change, stop and say so in your reply instead.
+- Tools: run commands via `mise exec -- …` (pnpm is only on PATH through mise). Beads: `env -u BEADS_DIR bd …` (a global env var points elsewhere). Start with `env -u BEADS_DIR bd update <bead> --status in_progress`. **Don't close the bead and don't git commit**: the architect reviews and commits. Other agents are working in parallel on other directories: **only touch the files listed as yours**. Don't run `uv add`/`pnpm add` unless your brief allows it.
+- Quality bar: mypy --strict clean, ruff clean, and tests that are meaningful, fast and **parallel-safe** (`pytest -n auto`: no shared mutable module state, no real network, no real sleeps; inject clocks and sleep functions). **Never call the real GitHub API in tests**; use `respx`. Logging: `logger = logging.getLogger(__name__)`, structured fields via `extra={...}`, and never log tokens or the Authorization header.
+- Before replying, run `cd backend && uv run pytest && uv run ruff check && uv run ruff format --check && uv run mypy src` (or the frontend equivalents) and make them pass. Reply in ≤200 words: the files changed, the public API you exposed, the test count and results, and any open concerns.
+"
+2026-11-17T10:41:58Z,architect,architect,subagent,claude-sonnet-5-5,medium,tel-api,Implement tel-api route wiring,"# Bead tel-api: wire the route end to end
+**Your files:** `backend/src/telescope/api/**`, `backend/src/telescope/main.py` (it already contains logging/OTel setup and a lifespan from tel-obs: keep them and merge), `backend/tests/api/**`, and `openapi.json` + `frontend/src/api/schema.d.ts` **only via `make gen-client`** (run from the repo root with `mise exec -- make gen-client`), and only if your changes alter the spec (e.g. response header docs). **The response/query model shapes in `models.py` must not change.**
+
+Existing building blocks (read them): `telescope.github.GitHubClient` (`fetch_org_repos(org, previous)`, `.rate_limit`), `telescope.cache` (`SnapshotService`, `InMemorySnapshotStore`, `CachedSnapshot`), `telescope.query.run_query` (`QueryResult`), `telescope.errors`, `telescope.models`, `telescope.settings.Settings`, `telescope.observability.context` (request id contextvar), and the test fixtures in `tests/fixtures/github.py`.
+
+1. **Composition** (`api/deps.py` or similar): a `Services` container with the httpx `AsyncClient` (timeout from settings), `GitHubClient`, `SnapshotService` (fetcher = `github.fetch_org_repos`, `ttl_s=settings.cache_ttl_seconds`). Change the signature to `create_app(settings: Settings | None = None, *, sleep=None, now=None) -> FastAPI`. Build the services **eagerly in create_app** and store them on `app.state` (tests use `httpx.ASGITransport`, which doesn't run lifespan). The lifespan closes them (`aclose` on the service and the http client) and keeps the existing OTel shutdown. Pass the injected `sleep`/`now` through to the GitHub client and cache so tests never sleep. A route dependency fetches the services from `request.app.state`.
+2. **Route** `GET /api/orgs/{org}/repos` (keep the decorator metadata and `operation_id`):
+   - `cached = await services.snapshots.get(org)`, then `result = run_query(cached.snapshot, query)`.
+   - Build a `RepoPage`: `org` as requested; `snapshot = SnapshotInfo(id, fetched_at, repo_count=len(repos), stale=cached.stale, cursor_from_older_snapshot=result.cursor_from_older_snapshot)`; `rate_limit = github.rate_limit.to_info()`.
+   - Headers:
+     - **Weak ETag** `W/""<16 hex of sha256(snapshot.id | query_hash | cursor | limit | stale)>""`. If `If-None-Match` matches (handle a list and `*`) → **304** with the ETag and no body.
+     - `Cache-Control: private, max-age=60`, or `no-cache` when stale.
+     - Upstream rate-limit state as `X-GitHub-RateLimit-Limit` / `-Remaining` / `-Reset` (epoch) when known.
+     - Document these headers in the route's `responses` so they appear in OpenAPI.
+3. **Problems** (`api/problems.py`): exception handlers producing `application/problem+json` matching `models.Problem`: `type` = `https://telescope.local/problems/<slug>`, title, status, detail, `instance` = request path, and `request_id` from the contextvar.
+   - `TelescopeError` subclasses use their `slug/status/title`.
+   - `UpstreamRateLimited` adds a `Retry-After` header and the `retry_after`, `rate_limit` (the RateLimitInfo dict, JSON-safe) and `pages_needed` (when set) extensions.
+   - `OrgNotFound` adds `org`.
+   - `RequestValidationError` → 422 `validation-error` with `errors: [{loc, msg, type}]`, made JSON-safe (drop `ctx`/`input`).
+   - Starlette `HTTPException` → a problem with its status.
+   - Any unhandled exception → 500 `internal-error`, logged with `logger.exception` and with no internals leaked.
+   - Also log handled upstream errors at WARNING with `org`, `slug` and `status`.
+4. **CORS:** `CORSMiddleware` with `settings.cors_origins`, GET only, and expose `X-Request-ID`, `ETag`, `Retry-After` and the X-GitHub-RateLimit-* headers.
+5. **Tests** (`tests/api/`): use respx plus `tests/fixtures/github.py` and an ASGITransport client against `create_app(Settings(...), sleep=<no-op async>, now=<controllable clock>)`, with a fixture per test (no module-global app). Cover:
+   - Happy path over 3 upstream pages, with filters and sort applied and the metadata correct.
+   - A second request with different filters hits the cache (upstream call count unchanged).
+   - Next-cursor round trip.
+   - Unknown org → 404 problem+json with the right content-type.
+   - Primary rate limit → 503 + `Retry-After` + `retry_after`.
+   - Upstream 500 forever → 502.
+   - Timeout → 504.
+   - A warm cache that has expired, with upstream failing → 200 `snapshot.stale=true` and `Cache-Control: no-cache`.
+   - Invalid param (`limit=0`, `sort=bogus`) → 422 problem.
+   - Garbage cursor → 400 `invalid-cursor`.
+   - If-None-Match → 304.
+   - Token configured → upstream got `Authorization`, and the token string appears in neither the response nor the captured logs (use caplog).
+   - Without a token → no Authorization header.
+   - The X-Request-ID header is present on the error responses.
+6. Run the whole backend suite plus ruff, format and mypy, and `mise exec -- make lint` from the repo root (it includes the openapi drift checks). If you changed the spec, the drift test must pass after `make gen-client`.
+## Shared context (every build agent)
+- Repo: /home/paul/.t3/projects/telescope. This is a timeboxed senior take-home: ""telescope"" serves `GET /api/orgs/{org}/repos` (FastAPI, Python 3.12, uv) to a React+TS frontend (Vite, pnpm). Read `docs/design/api-contract.md` (the intended semantics), `backend/src/telescope/models.py` (contract and domain types: `Repo`, `Snapshot`, `RateLimitState`, `RepoQuery`…), `backend/src/telescope/errors.py` (domain exceptions) and `backend/src/telescope/observability/metrics.py` (the metrics facade: call these functions and don't import OTel elsewhere). Research notes are in `docs/research/` if relevant.
+- **Do not change** `models.py`, `errors.py` or `openapi.json`. If you believe the contract needs a change, stop and say so in your reply instead.
+- Tools: run commands via `mise exec -- …` (pnpm is only on PATH through mise). Beads: `env -u BEADS_DIR bd …` (a global env var points elsewhere). Start with `env -u BEADS_DIR bd update <bead> --status in_progress`. **Don't close the bead and don't git commit**: the architect reviews and commits. Other agents are working in parallel on other directories: **only touch the files listed as yours**. Don't run `uv add`/`pnpm add` unless your brief allows it.
+- Quality bar: mypy --strict clean, ruff clean, and tests that are meaningful, fast and **parallel-safe** (`pytest -n auto`: no shared mutable module state, no real network, no real sleeps; inject clocks and sleep functions). **Never call the real GitHub API in tests**; use `respx`. Logging: `logger = logging.getLogger(__name__)`, structured fields via `extra={...}`, and never log tokens or the Authorization header.
+- Before replying, run `cd backend && uv run pytest && uv run ruff check && uv run ruff format --check && uv run mypy src` (or the frontend equivalents) and make them pass. Reply in ≤200 words: the files changed, the public API you exposed, the test count and results, and any open concerns.
+"

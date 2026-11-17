@@ -47,7 +47,7 @@ Opaque `base64url(JSON)`:
     "archived": false, "fork": false,
     "license": {"spdx_id": "Apache-2.0|null", "name": "string"} | null,
     "topics": ["..."],
-    "created_at": "RFC3339", "updated_at": "RFC3339", "pushed_at": "RFC3339|null"
+    "created_at": "RFC3339|null", "updated_at": "RFC3339|null", "pushed_at": "RFC3339|null"
   }],
   "page": {
     "limit": 30, "total": 812,             // total = count after filters
