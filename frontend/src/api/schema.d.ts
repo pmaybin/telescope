@@ -218,9 +218,19 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description A page of repositories. */
             200: {
                 headers: {
+                    /** @description `private, max-age=60`, or `no-cache` when stale. */
+                    "Cache-Control"?: string;
+                    /** @description Weak validator for this page. */
+                    ETag?: string;
+                    /** @description Upstream rate limit ceiling, when known. */
+                    "X-GitHub-RateLimit-Limit"?: number;
+                    /** @description Upstream requests remaining, when known. */
+                    "X-GitHub-RateLimit-Remaining"?: number;
+                    /** @description Upstream window reset (epoch seconds), when known. */
+                    "X-GitHub-RateLimit-Reset"?: number;
                     [name: string]: unknown;
                 };
                 content: {

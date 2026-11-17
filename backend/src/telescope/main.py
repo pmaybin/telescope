@@ -3,14 +3,15 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
+from telescope.api.deps import Now, Sleep, build_services, install_services
+from telescope.api.problems import PROBLEM_JSON, UnhandledErrorMiddleware, install_problem_handlers
 from telescope.api.routes import router
 from telescope.observability.logging import configure_logging
 from telescope.observability.middleware import RequestIdMiddleware
 from telescope.observability.otel import configure_otel, shutdown_otel
 from telescope.settings import Settings
-
-PROBLEM_JSON = "application/problem+json"
 
 
 def _problem_json_openapi(app: FastAPI) -> dict[str, Any]:
@@ -31,18 +32,48 @@ def _problem_json_openapi(app: FastAPI) -> dict[str, Any]:
     return schema
 
 
-def create_app() -> FastAPI:
-    settings = Settings()
+EXPOSED_HEADERS = [
+    "X-Request-ID",
+    "ETag",
+    "Retry-After",
+    "X-GitHub-RateLimit-Limit",
+    "X-GitHub-RateLimit-Remaining",
+    "X-GitHub-RateLimit-Reset",
+]
+
+
+def create_app(
+    settings: Settings | None = None,
+    *,
+    sleep: Sleep | None = None,
+    now: Now | None = None,
+) -> FastAPI:
+    settings = settings or Settings()
     token = settings.github_token.get_secret_value() if settings.github_token else None
     configure_logging(settings.log_level, token=token)
+    # Built eagerly (not in lifespan): ASGITransport-based tests never run lifespan.
+    services = build_services(settings, sleep=sleep, now=now)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        yield
-        shutdown_otel()
+        try:
+            yield
+        finally:
+            await services.aclose()
+            shutdown_otel()
 
     app = FastAPI(title="Telescope API", version="0.1.0", lifespan=lifespan)
+    install_services(app, services)
+    install_problem_handlers(app)
+    # Middleware order: the last added is outermost.
+    app.add_middleware(UnhandledErrorMiddleware)
     app.add_middleware(RequestIdMiddleware)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_methods=["GET"],
+        expose_headers=EXPOSED_HEADERS,
+    )
     app.include_router(router)
 
     @app.get("/healthz", include_in_schema=False)

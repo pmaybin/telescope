@@ -599,7 +599,39 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "A page of repositories.",
+            "headers": {
+              "Cache-Control": {
+                "description": "`private, max-age=60`, or `no-cache` when stale.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Weak validator for this page.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-GitHub-RateLimit-Limit": {
+                "description": "Upstream rate limit ceiling, when known.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-GitHub-RateLimit-Remaining": {
+                "description": "Upstream requests remaining, when known.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-GitHub-RateLimit-Reset": {
+                "description": "Upstream window reset (epoch seconds), when known.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           },
           "304": {
             "description": "Not modified (If-None-Match)"

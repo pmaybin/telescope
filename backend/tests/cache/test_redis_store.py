@@ -101,3 +101,15 @@ async def test_works_under_snapshot_service(store: RedisSnapshotStore) -> None:
     assert calls == 1
     assert second.snapshot == first.snapshot
     assert await store.get("acme") == first.snapshot
+
+
+def test_build_services_selects_backend() -> None:
+    from telescope.api.deps import build_services
+    from telescope.cache import InMemorySnapshotStore, RedisSnapshotStore
+    from telescope.settings import Settings
+
+    mem = build_services(Settings(cache_backend="memory"))
+    red = build_services(Settings(cache_backend="redis", redis_url="redis://unused:6379/0"))
+    assert isinstance(mem.snapshots._store, InMemorySnapshotStore)
+    assert isinstance(red.snapshots._store, RedisSnapshotStore)
+    assert red.redis is not None
