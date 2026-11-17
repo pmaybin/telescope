@@ -1,8 +1,9 @@
 import { Search } from 'lucide-react'
 import { useState } from 'react'
-import type { FormEvent } from 'react'
+import type { FormEvent, MouseEvent } from 'react'
 import type { RepoPage } from '../api/client'
 import { ORG_PATTERN } from '../format'
+import { exploreHref, navigate, usePathname } from '../router'
 import { RateLimitPill } from './RateLimitPill'
 import { ThemeToggle } from './ThemeToggle'
 
@@ -12,7 +13,35 @@ type Props = {
   onSubmit: (org: string) => void
 }
 
+function NavLink({
+  href,
+  current,
+  children,
+}: {
+  href: string
+  current: boolean
+  children: string
+}) {
+  const onClick = (e: MouseEvent<HTMLAnchorElement>) => {
+    if (e.defaultPrevented || e.button !== 0) return
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+    e.preventDefault()
+    if (!current) navigate(href)
+  }
+  return (
+    <a
+      className="nav-link"
+      href={href}
+      aria-current={current ? 'page' : undefined}
+      onClick={onClick}
+    >
+      {children}
+    </a>
+  )
+}
+
 export function TopBar({ org, rateLimit, onSubmit }: Props) {
+  const onArchitecture = usePathname().replace(/\/+$/, '') === '/architecture'
   const [draft, setDraft] = useState(org)
   const [error, setError] = useState<string | null>(null)
 
@@ -43,11 +72,23 @@ export function TopBar({ org, rateLimit, onSubmit }: Props) {
         <div className="topbar-left">
           <a className="brand" href="/" aria-label="Telescope home">
             <img src="/favicon.svg" alt="" />
-            Telescope
+            <span className="brand-name">Telescope</span>
           </a>
-          {/* Navigation links ("Explore" | "Architecture") go here. */}
+          <nav className="topnav" aria-label="Primary">
+            <NavLink href={exploreHref()} current={!onArchitecture}>
+              Explore
+            </NavLink>
+            <NavLink href="/architecture" current={onArchitecture}>
+              Architecture
+            </NavLink>
+          </nav>
         </div>
-        <form onSubmit={submit} className="org-form" role="search">
+        <form
+          onSubmit={submit}
+          className="org-form"
+          role="search"
+          data-compact={onArchitecture || undefined}
+        >
           <label htmlFor="org" className="sr-only">
             Organisation
           </label>

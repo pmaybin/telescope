@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useState, useSyncExternalStore } from 'react'
 
 export type Theme = 'light' | 'dark'
 export const THEME_KEY = 'telescope-theme'
@@ -43,4 +43,24 @@ export function useTheme(): { theme: Theme; toggle: () => void } {
     setTheme(next)
   }, [theme])
   return { theme, toggle }
+}
+
+/**
+ * The theme currently applied to <html>, following `data-theme` mutations
+ * (the toggle, `?theme=`) and falling back to the OS preference.
+ */
+export function useAppliedTheme(): Theme {
+  return useSyncExternalStore(
+    (cb) => {
+      const obs = new MutationObserver(cb)
+      obs.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['data-theme'],
+      })
+      return () => obs.disconnect()
+    },
+    () =>
+      (document.documentElement.getAttribute('data-theme') as Theme | null) ??
+      systemTheme(),
+  )
 }

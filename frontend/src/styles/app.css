@@ -212,6 +212,12 @@ svg {
   display: flex;
   gap: var(--space-2);
 }
+.field-row .select {
+  flex: 1;
+}
+.field-row .btn-icon {
+  flex: none;
+}
 
 /* Segmented control */
 .segmented {
@@ -612,7 +618,7 @@ svg {
   grid-column: span 3;
 }
 .f-sort {
-  grid-column: span 5;
+  grid-column: span 3;
 }
 .f-size {
   grid-column: span 2;
@@ -621,7 +627,7 @@ svg {
   grid-column: span 2;
 }
 .f-actions {
-  grid-column: span 3;
+  grid-column: span 5;
   display: flex;
   justify-content: flex-end;
 }
@@ -800,10 +806,10 @@ svg {
 }
 
 .repo-table td {
-  height: 80px;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-3);
   border-bottom: 1px solid var(--border);
-  vertical-align: middle;
+  vertical-align: top;
+  line-height: 18px;
   font-size: var(--text-sm);
   overflow: hidden;
 }
@@ -828,6 +834,7 @@ svg {
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
+  height: 18px;
 }
 .repo-link {
   display: inline-flex;
@@ -835,6 +842,7 @@ svg {
   gap: 6px;
   min-width: 0;
   font-size: var(--text-md);
+  line-height: 18px;
   font-weight: 600;
   border-radius: var(--radius-sm);
 }
@@ -871,8 +879,8 @@ svg {
 .desc {
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
   overflow: hidden;
   line-height: 18px;
   color: var(--text-muted);
@@ -880,7 +888,7 @@ svg {
 .topics {
   display: flex;
   gap: var(--space-1);
-  margin-top: 4px;
+  margin-top: 2px;
   height: 18px;
   overflow: hidden;
 }
@@ -901,6 +909,7 @@ svg {
 .lang {
   display: inline-flex;
   align-items: center;
+  height: 18px;
   gap: 6px;
   max-width: 100%;
 }
@@ -920,6 +929,7 @@ svg {
 .stars {
   display: inline-flex;
   align-items: center;
+  height: 18px;
   gap: 4px;
   font-weight: 500;
 }

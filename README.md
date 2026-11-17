@@ -4,6 +4,8 @@
 
 Telescope is a small internal-tool-style explorer for a GitHub organisation's public repositories. A FastAPI backend (`GET /api/orgs/{org}/repos`) fetches an org's repos from the GitHub REST API once, caches them as an immutable snapshot, and serves filtered, sorted and paginated pages from memory. A React + TypeScript UI sits on top, and OpenTelemetry feeds a provisioned Grafana dashboard. It was built as a timeboxed take-home and is meant to be cloned and run locally.
 
+System design, diagrams and decisions: [docs/architecture.md](docs/architecture.md), also shown in the app at `/architecture`.
+
 Created in [T3 Code](https://t3.codes).
 
 ## Quick start
