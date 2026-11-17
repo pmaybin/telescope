@@ -1,0 +1,55 @@
+name: telescope
+
+services:
+  lgtm:
+    image: grafana/otel-lgtm:0.41.0
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000" # Grafana
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+    environment:
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /otel-lgtm/grafana/conf/provisioning/dashboards/custom/telescope.json
+    volumes:
+      - ./grafana/dashboards/telescope.json:/otel-lgtm/grafana/conf/provisioning/dashboards/custom/telescope.json:ro
+      - ./grafana/provisioning/dashboards.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/custom.yaml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:3000/api/health && test -f /tmp/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  api:
+    build: ../backend
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS:-600}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OTEL_SERVICE_NAME: telescope-api
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://lgtm:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_SEMCONV_STABILITY_OPT_IN: http
+      OTEL_METRIC_EXPORT_INTERVAL: "10000"
+    depends_on:
+      lgtm:
+        condition: service_healthy
+
+  web:
+    build: ../frontend
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      - api
+
+  # Placeholder for the optional shared-cache stretch bead. Enable with
+  # `--profile redis` after uncommenting.
+  # redis:
+  #   image: redis:7-alpine
+  #   profiles: ["redis"]
+  #   ports:
+  #     - "6379:6379"
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 10s
