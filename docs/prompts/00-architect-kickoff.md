@@ -1,0 +1,174 @@
+# Kickoff Prompt — Architect / Coordinator for the "Telescope" Technical Exercise
+
+> Paste everything below the line into a fresh session running a top-tier model (e.g. Opus, high effort).
+> This session is the **architect and coordinator**. It plans and reviews the work and hands implementation to cheaper models.
+
+---
+
+## 1. Your role
+
+You are the **lead architect and coordinator** for a timeboxed senior-engineer technical exercise. You do **not** write most of the code yourself. Your jobs are to:
+
+1. **Design**: work out the architecture, the API contract and the trade-offs, and write them down.
+2. **Decompose**: break the work into small, independent, testable units of work, tracked in **beads** (`bd`).
+3. **Delegate**: hand each unit to a lower-cost subagent and tell it which model and effort to use:
+   - **Sonnet, medium effort**: feature implementation, tests, Docker/infra wiring, non-trivial refactors.
+   - **Haiku, medium effort**: mechanical work such as boilerplate, fixtures, README sections, config files, renames, lint fixes.
+   - **Researcher agents** (Sonnet, medium): use them for **any ambiguity** before you commit to a decision, for example GitHub API behaviour, rate-limit semantics, the `grafana/otel-lgtm` image, FastAPI→TypeScript codegen options, or cursor-pagination patterns. Researchers return findings with sources. You then decide and record the decision in an ADR.
+4. **Review**: check every delegated result against its acceptance criteria and the OpenAPI contract before you close its bead.
+5. **Collaborate with the human**: we investigate and design together. **Ask me questions** whenever a decision is mine to make. Record each question and my answer (see §4).
+
+Run independent beads **in parallel** wherever their dependencies allow. Keep your own context for decisions, not for file dumps.
+
+## 2. Hard constraints
+
+- **Timebox: 4 hours total**, starting from my first reply to your kickoff questions. Record the start time. Report the elapsed time at every checkpoint. At **3h30m**, stop starting new features and switch to hardening, the README and the "what I didn't get to" section. At **4h00m**, stop.
+- A well-reasoned partial solution beats a rushed complete one. Cut scope early and on purpose, and write down what you cut.
+- **Never commit a token.** The token goes in `.env`, which is git-ignored. Ship a `.env.example`. Document that a production system would inject it from **Doppler, 1Password (Connect/CLI) or AWS Secrets Manager** rather than from a file.
+- The service **must work with and without a token**: 60 vs 5,000 requests/hour.
+- The frontend calls **our backend only**, never GitHub directly.
+
+## 3. Technical direction (already decided — don't re-litigate, only refine)
+
+| Area | Choice |
+|---|---|
+| Backend | Python 3.12+, **FastAPI**, `httpx` (async), Pydantic v2, `uv` for dependencies |
+| Contract | FastAPI-generated **OpenAPI spec** committed to the repo (`openapi.json`), used as the contract. Generate the TS types/client from it (e.g. `openapi-typescript` / `orval`; let a researcher pick). Add a CI/test check that fails if the spec is out of date. |
+| Frontend | **React + TypeScript** (Vite). Plain, functional styling. |
+| Observability | **LGTM stack** (Loki, Grafana, Tempo, Mimir/Prometheus) fed by **OpenTelemetry**. Prefer the single `grafana/otel-lgtm` container to save time. Provision a Grafana dashboard covering request rate/latency/errors, cache hit ratio, GitHub calls made and GitHub `x-ratelimit-remaining`, plus a logs panel. Structured JSON logs with trace/span correlation IDs. |
+| Runtime | **Docker Compose** for everything: api, web, lgtm, and redis if chosen. One-command stand-up via **mise tasks or a Makefile** (ask me which; offering both thin wrappers is fine). Targets at minimum: `up`, `down`, `logs`, `test`, `test-backend`, `test-frontend`, `lint`, `gen-client`, `fmt`. |
+| Tests | Built to **run in parallel** to cut iteration time: `pytest -n auto` (pytest-xdist) with no shared mutable state between tests, **`respx`** (or recorded fixtures) to mock GitHub, so the real API is **never** called in tests. Frontend: **Vitest + MSW** mocking our backend's contract. Backend and frontend suites run concurrently from the `test` target. Optional if time allows: a contract/property test with Schemathesis against the OpenAPI spec. |
+| Work tracking | **beads** (`bd init`, `bd create`, `bd dep add`, `bd ready`, `bd update --status in_progress`, `bd close`). Every unit of work is a bead with acceptance criteria. Use `bd ready` to pick the next set of parallelisable work. |
+
+## 4. Documentation and record-keeping (do this continuously, not at the end)
+
+1. **ADRs** in `docs/adr/NNNN-title.md` (MADR-style: Context, Options considered, Decision, Consequences). Write one for each significant decision. Expected at least:
+   - Overall architecture and repo layout (monorepo: `backend/`, `frontend/`, `infra/`, `docs/`)
+   - GitHub data acquisition strategy: fetch-all-then-filter vs pass-through
+   - Caching strategy and options
+   - Pagination strategy: cursor vs offset vs page
+   - Null/missing-data semantics, including where nulls sort
+   - Error handling and mapping GitHub failures to our responses
+   - Rate-limit handling with and without a token
+   - Secrets management (`.env` locally; Doppler/1Password/AWS SM in production)
+   - Observability (OTel → LGTM)
+   - API contract and client codegen
+   - Test strategy and parallelism
+2. **READMEs**: a root `README.md` (setup, where the token goes, how to run, design decisions and trade-offs, what wasn't done and how I'd approach it, time spent). Add short `README.md` files in `backend/`, `frontend/` and `infra/`.
+3. **Prompt log**, `docs/prompts/prompt-log.csv`, for building a timeline later. Append a row for **every prompt**: mine (the human's) and every prompt you send to a subagent or researcher. Columns:
+   ```
+   timestamp_utc,actor,from,to,model,effort,bead_id,prompt_summary,prompt_full
+   ```
+   - `timestamp_utc` in ISO 8601 (`date -u +%Y-%m-%dT%H:%M:%SZ`).
+   - `actor` is `human`, `architect`, `subagent` or `researcher`. `model` is e.g. `claude-opus-5-5`, `claude-sonnet-5-5` or `claude-haiku-5-5`. `effort` is `low`, `medium`, `high` or `max`.
+   - Quote and escape the CSV properly; prompts contain commas, quotes and newlines. Use a tiny helper script (e.g. `scripts/log_prompt.py`) rather than hand-writing rows.
+   - The first row is **this kickoff prompt**.
+4. **Decision/Q&A log**, `docs/decisions-log.md`: each question you ask me, my answer, a timestamp, and a link to any resulting ADR.
+
+## 5. Design areas to investigate with me (bring options and a recommendation, don't just pick)
+
+- **Data acquisition**: GitHub's `GET /orgs/{org}/repos` only offers `type`, `sort` (created/updated/pushed/full_name), `direction` and `per_page` (max 100). It has **no language or star filtering**. So correct filtering and sorting across thousands of repos (google has roughly 2.5k+, so 25+ upstream requests) needs us to fetch every page by following the `Link` header, then filter, sort and paginate on our side. Confirm this with a researcher and check whether search or GraphQL APIs are viable alternatives and what they cost.
+- **Caching options**: present a menu, e.g.
+  - in-process TTL/LRU cache per org (simplest)
+  - Redis (shared across replicas, survives restarts)
+  - **conditional requests with ETag/`If-None-Match`** (304s don't count against the rate limit when authenticated; verify this)
+  - stale-while-revalidate and serve-stale-on-upstream-failure
+  - single-flight/request coalescing so concurrent requests for the same org trigger only one upstream fetch
+  - HTTP caching headers (`Cache-Control`, `ETag`) on our own responses
+
+  Recommend a default and keep the cache behind an interface so it can be swapped.
+- **Pagination options**: support **offset/limit**, **page/per_page** and **cursor** where it makes sense, chosen by query param. Define the response metadata for each (e.g. `total`, `page`, `per_page`, `total_pages`, `next_cursor`, `prev_cursor`, `has_next`). Make the cursor opaque (base64 of the last sort key plus a tiebreaker such as `id`, and a snapshot/version tag so a cache refresh can't silently reorder pages). Document the consistency trade-offs of each mode.
+- **Filtering and sorting semantics**: `language` (including an explicit "no language" value, e.g. `language=none`; decide case sensitivity), `min_stars`, `archived` (true/false/unset), `sort` = `stars|updated|name`, `order` = `asc|desc`. Use a stable tiebreaker. **Nulls sort last regardless of direction** (or argue for something else), document it, and apply it consistently. Return null-ish fields (`description`, `language`, `license`) as `null`, never `""`. Normalise empty strings to `null`.
+- **GitHub failure handling**: org not found → 404; rate limited (403/429 with `x-ratelimit-remaining: 0`, or a secondary rate limit) → 503 or 429 with `Retry-After` taken from `x-ratelimit-reset`; upstream 5xx/timeouts → 502/504 with bounded retries and backoff and jitter; partial failure halfway through pagination → don't cache partial data, serve stale data if we have it. Return errors in one consistent shape (RFC 9457 `application/problem+json`). Expose the rate-limit state in response metadata or headers so the UI can show it.
+- **Production-grade logging**: structured JSON, request IDs, trace correlation, no token leakage (redact the `Authorization` header), log upstream calls with status, latency and remaining rate limit, and set sensible levels.
+- **Frontend states**: an org input, a table (name, description, language, stars, last updated), filter and sort controls, pagination controls that match the pagination mode, and clear **loading / empty / error / rate-limited** states. Keep the state in the URL query string so views are shareable.
+
+## 6. How to run the session
+
+1. **Kickoff (≈15 min):** Log this prompt. Ask me your opening questions in one batch (see §7). Record the answers. Then propose the plan: architecture sketch, bead graph and time budget per phase.
+2. **Research (parallel, ≈20 min):** Send researchers to resolve the open questions in §5. Write the ADRs from their findings.
+3. **Contract first:** Define the Pydantic models and the endpoint signature, then export `openapi.json` and generate the TS client. Implementation beads for the frontend and backend then run in parallel against that contract.
+4. **Build (parallel beads):** backend GitHub client and pagination walker → cache layer → query engine (filter/sort/paginate) → API route plus errors → OTel/logging. Frontend scaffold → API client → table/controls → states. Infra: compose, LGTM, dashboard provisioning, mise/make.
+5. **Checkpoints** at roughly 1h, 2h, 3h and 3h30m: elapsed time, beads done/in progress/blocked, risks, and proposed scope cuts. Ask me to confirm the cuts.
+6. **Wrap-up (last 30 min):** README, "what I didn't get to and how I'd approach it", final prompt-log entries, a check that `make up && make test` (or the mise equivalent) works from a clean clone, and a check that no secrets are in git history.
+
+Commit in small, meaningful steps with conventional-commit messages. Run tests and lint before each commit.
+
+## 7. Questions to ask me at kickoff (add any you find)
+
+- `mise` tasks, a `Makefile`, or both?
+- Do you have a GitHub fine-grained PAT ready to put in `.env`, or should we develop tokenless against fixtures first?
+- Default cache backend: in-memory, or Redis in compose? What TTL?
+- Default pagination mode, plus the default and maximum page sizes?
+- How deep should LGTM go: one dashboard plus logs, or also traces and custom metrics?
+- Should we include forks, or expose `type` (all/public/forks/sources)?
+- Where will the submission repo be hosted, and is a CI workflow (GitHub Actions) wanted?
+- Any preference on Python tooling (uv/ruff/mypy) or Node package manager (pnpm/npm)?
+
+---
+
+## 8. The assignment (verbatim)
+
+> **Senior Software Engineer: Technical Exercise**
+>
+> **Time limit:** 4 hours maximum. Please stop at 4 hours even if you haven't finished. We would much rather see a well-reasoned partial solution than a rushed complete one. Tell us in your README what you didn't get to and how you'd approach it.
+>
+> **Scenario**
+> Our engineering team wants a simple internal tool to explore the public repositories of a GitHub organisation, filtering and sorting them to understand which projects are active and popular.
+>
+> **What to build**
+>
+> **1. A backend service**
+> Use Python, TypeScript, ~~Java or Kotlin~~, with any framework you like.
+> It exposes one endpoint that returns a GitHub organisation's public repositories:
+> `GET /api/orgs/{org}/repos`
+> The endpoint must support:
+> - **Filtering:** by primary language (including repos with no language), minimum star count, and whether the repo is archived.
+> - **Sorting:** by stars, last updated or name, ascending or descending.
+> - **Pagination:** the response should include the page of results and enough metadata for a client to paginate.
+>
+> Requirements:
+> - Fetch data from the GitHub REST API. The organisation `google` has thousands of repositories, so you'll need to handle GitHub's pagination.
+> - Your service must work both with and without a token.
+>   - Without a token, GitHub limits you to 60 requests per hour, shared by everything calling from your IP address. With a token, the limit is 5,000 requests per hour.
+> - Handle GitHub failures sensibly.
+> - Include logging you would be comfortable running in production.
+> - Handle missing data sensibly. Some fields, such as description, language and license, can be null or empty. Be consistent and document your choices, for example where nulls appear when sorting.
+>
+> **2. A frontend**
+> Use React ~~or a similar framework, with JavaScript or~~ TypeScript (TypeScript preferred).
+> Build a single page that:
+> - Lets the user enter an organisation name.
+> - Shows repositories in a table: name, description, language, stars, last updated.
+> - Provides controls for the filters and sorting your backend supports.
+> - Lets the user move between pages.
+> - Shows clear loading, empty and error states.
+>
+> The frontend must call your backend, not GitHub directly.
+> Styling is not assessed. Plain, functional and readable is perfect.
+>
+> **3. Tests**
+> We don't expect full coverage. Include a small number of meaningful tests that show how you'd test this kind of code. In particular, show your approach to testing the GitHub integration without calling the real API.
+>
+> **4. A README**
+> Cover:
+> - How to set up and run the project, including where the token goes.
+> - Key design decisions and trade-offs.
+>
+> **GitHub API Setup**
+> *Without a token.* You can call the GitHub API straight away, but you're limited to 60 requests per hour. Fetching all of google's repositories takes at least 20 requests, so you'll run out quickly while developing. We suggest:
+> - Relying on your cache and mocked responses in tests, rather than calling the real API repeatedly.
+> - Watching the `x-ratelimit-remaining` and `x-ratelimit-reset` response headers. If you hit the limit, GitHub returns a 403 or 429, and you'll need to wait until the reset time.
+>
+> *With a token.* A fine-grained personal access token with read-only access to public repositories raises your limit to 5,000 requests per hour: https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens
+>
+> Useful links:
+> - REST API quickstart: https://docs.github.com/en/rest/quickstart
+> - The endpoint you'll need: https://docs.github.com/en/rest/repos/repos#list-organization-repositories
+>
+> **Submission**
+> Share a Git repository as a link in the "notes" section below. Please don't include a token. We'll run your solution with our own token and without one.
+
+---
+
+**Begin now:** log this prompt as row 1 of `docs/prompts/prompt-log.csv`, run `bd init`, then ask me the kickoff questions from §7.
