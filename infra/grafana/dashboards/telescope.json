@@ -303,18 +303,35 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "telescope_github_ratelimit_remaining{service_name=\"telescope-api\"}",
+          "expr": "max by (service_name) (telescope_github_ratelimit_remaining{service_name=\"telescope-api\"})",
           "legendFormat": "remaining"
         },
         {
           "refId": "B",
-          "expr": "telescope_github_ratelimit_limit{service_name=\"telescope-api\"}",
+          "expr": "max by (service_name) (telescope_github_ratelimit_limit{service_name=\"telescope-api\"})",
           "legendFormat": "limit"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "none"
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 10
+              },
+              {
+                "color": "green",
+                "value": 30
+              }
+            ]
+          }
         },
         "overrides": []
       },
@@ -347,12 +364,12 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "telescope_github_ratelimit_remaining{service_name=\"telescope-api\"}",
+          "expr": "max by (service_name) (telescope_github_ratelimit_remaining{service_name=\"telescope-api\"})",
           "legendFormat": "remaining"
         },
         {
           "refId": "B",
-          "expr": "telescope_github_ratelimit_limit{service_name=\"telescope-api\"}",
+          "expr": "max by (service_name) (telescope_github_ratelimit_limit{service_name=\"telescope-api\"})",
           "legendFormat": "limit"
         }
       ],
@@ -422,7 +439,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "{service_name=\"telescope-api\"} | json | level=~\"(?i)error|critical|warning\"",
+          "expr": "{service_name=\"telescope-api\"} | severity_text=~\"(?i)warn.*|error|critical|fatal\"",
           "queryType": "range"
         }
       ],
