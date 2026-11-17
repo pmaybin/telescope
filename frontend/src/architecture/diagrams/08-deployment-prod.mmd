@@ -1,0 +1,47 @@
+flowchart LR
+    users(["Users"])
+    sso["SSO / OIDC proxy"]
+    cdn["CDN: static SPA"]
+    alb["ALB: TLS, WAF"]
+
+    subgraph cluster["ECS or Kubernetes"]
+        subgraph apis["api replicas, 2 or more, autoscaled"]
+            a1["api 1"]
+            a2["api N"]
+        end
+        worker["Refresher worker"]
+        sched["Scheduler: warm-up and refresh-ahead"]
+        hook["Webhook receiver"]
+    end
+
+    redis[("ElastiCache Redis: shared snapshots, distributed single-flight lock")]
+    pg[("Postgres: snapshot history, optional")]
+    sm["AWS Secrets Manager: GitHub App keys"]
+    gh[("GitHub REST API plus webhooks")]
+
+    subgraph obs["Observability"]
+        gw["OTel Collector gateway: tail sampling"]
+        gc["Grafana Cloud: Mimir, Loki, Tempo"]
+        alerts["Alerting: on-call"]
+    end
+
+    users --> sso
+    sso --> cdn
+    sso --> alb
+    alb --> a1
+    alb --> a2
+    a1 --> redis
+    a2 --> redis
+    sched -->|"enqueue refresh"| worker
+    worker --> redis
+    worker -->|"installation tokens, REST"| gh
+    a1 -->|"cache miss only"| gh
+    gh -->|"push webhooks"| hook
+    hook -->|"invalidate or refresh"| redis
+    sm -.->|"inject at start"| a1
+    sm -.->|"inject at start"| worker
+    worker -.-> pg
+    a1 -->|"OTLP"| gw
+    worker -->|"OTLP"| gw
+    gw --> gc
+    gc --> alerts

@@ -1,0 +1,42 @@
+flowchart TD
+    resp["GitHub response or failure for one page"]
+    resp --> ok{"status"}
+    ok -->|"2xx or 304"| good["Page accepted, rate limit state updated"]
+    ok -->|"404"| nf["OrgNotFound"]
+    ok -->|"403 or 429"| lim{"x-ratelimit-remaining is 0?"}
+    ok -->|"other 4xx"| un4["UpstreamUnavailable, no retry"]
+    ok -->|"5xx"| retry
+    ok -->|"timeout"| retry
+    ok -->|"network error"| retry
+
+    lim -->|"yes: primary"| prim["UpstreamRateLimited, retry_after = reset minus now"]
+    lim -->|"no"| sec{"retry-after header or body says secondary rate limit?"}
+    sec -->|"yes"| secl["UpstreamRateLimited secondary, retry_after header or 60s"]
+    sec -->|"no"| un403["UpstreamUnavailable"]
+
+    retry{"attempts used less than 3 retries?"}
+    retry -->|"yes"| jit["Sleep full jitter: uniform 0 to min 8s, 0.5s x 2^attempt"]
+    jit --> resp
+    retry -->|"no, last failure was timeout"| to["UpstreamTimeout"]
+    retry -->|"no, other failure"| un5["UpstreamUnavailable"]
+
+    pages["Budget guard after page 1: remaining below N minus 1"] --> prim2["UpstreamRateLimited with pages_needed"]
+
+    nf --> neg["Delete cache entry, negative cache 60s"]
+    neg --> p404["404 org-not-found"]
+    nf -.->|"never masked by stale"| p404
+
+    prim --> uerr(["UpstreamError"])
+    prim2 --> uerr
+    secl --> uerr
+    un4 --> uerr
+    un403 --> uerr
+    un5 --> uerr
+    to --> uerr
+
+    uerr --> st{"stale snapshot available and age below 24h?"}
+    st -->|"yes"| ok200["200 with snapshot.stale=true"]
+    st -->|"no"| map{"error type"}
+    map -->|"UpstreamRateLimited"| p503["503 upstream-rate-limited with Retry-After"]
+    map -->|"UpstreamUnavailable"| p502["502 upstream-unavailable"]
+    map -->|"UpstreamTimeout"| p504["504 upstream-timeout"]

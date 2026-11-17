@@ -1,0 +1,46 @@
+sequenceDiagram
+    autonumber
+    actor B as Browser
+    participant N as nginx
+    participant R as Route
+    participant S as SnapshotService
+    participant G as GitHubClient
+    participant H as GitHub API
+    participant St as SnapshotStore
+    participant Q as run_query
+
+    B->>N: GET /api/orgs/google/repos?sort=stars
+    N->>R: proxy with X-Request-ID
+    R->>S: get("google")
+    S->>St: get("google")
+    St-->>S: None (miss)
+    Note over S: single-flight: one shared task per org key
+    S->>G: fetch_org_repos("google", None)
+    G->>H: GET /orgs/google/repos?type=public&per_page=100&page=1
+    H-->>G: 200, Link rel=last page=30, x-ratelimit-remaining
+    Note over G: total pages N = 30 from rel=last
+    alt remaining is less than N-1
+        G-->>S: UpstreamRateLimited, pages_needed=N
+        S-->>R: raise, no snapshot stored
+        R-->>B: 503 problem+json with Retry-After
+    else enough quota
+        par pages 2..N, at most 8 in flight
+            G->>H: GET page 2
+            H-->>G: 200 plus ETag
+        and
+            G->>H: GET page N
+            H-->>G: 200 plus ETag
+        end
+        Note over G: any page failure cancels siblings, no partial data
+        G-->>S: Snapshot with content-hash id and page_etags
+        S->>St: set("google", snapshot)
+        S-->>R: CachedSnapshot, stale=false
+        R->>Q: run_query(snapshot, query)
+        Note over Q: filter, sort nulls last, keyset slice
+        Q-->>R: QueryResult
+        R-->>B: 200 RepoPage, ETag, Cache-Control private max-age=60, X-GitHub-RateLimit-*
+    end
+    Note over S,G: a concurrent identical request joins the same in-flight task and shares its result or error
+    B->>R: second caller, same org, during the fetch
+    R->>S: get("google")
+    S-->>R: awaits the shared flight, no extra GitHub calls

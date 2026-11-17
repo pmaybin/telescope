@@ -20,7 +20,7 @@ GitHub's REST primary limit is 60 requests/hour unauthenticated and 5,000/hour w
 - **Secondary limit**: 403/429 with `retry-after`, or a body containing "secondary rate limit" -> `UpstreamRateLimited(secondary=True, retry_after = retry-after or 60)`. We never retry through it, since the docs warn that continued requests can get an integration banned.
 - Mapped to 503 + `Retry-After` (ADR-0006), unless a stale snapshot can be served (ADR-0003).
 - Quota-saving measures, in order of impact: the 10 minute TTL, single-flight, then ETag revalidation. The last helps only with a token, because **unauthenticated 304s still count** (research section 4).
-- Page concurrency is capped at 4 (ADR-0002) to stay clear of secondary limits.
+- Page concurrency is capped at 8 (ADR-0002; raised from 4 after measurement) to stay clear of secondary limits.
 
 ## Consequences
 - Pro: we fail fast and cheaply with an actionable `Retry-After` and `pages_needed` rather than burning quota on a doomed walk.

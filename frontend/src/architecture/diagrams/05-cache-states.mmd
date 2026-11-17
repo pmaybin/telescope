@@ -1,0 +1,31 @@
+stateDiagram-v2
+    [*] --> Absent
+    Absent --> Fetching : first request, miss
+    Fetching --> Fresh : complete walk stored
+    Fetching --> NegativeCached : GitHub 404, OrgNotFound
+    Fetching --> Absent : upstream error, nothing stored
+    NegativeCached --> Absent : after 60s
+    NegativeCached --> NegativeCached : requests served 404 from memory
+
+    state Fresh {
+        [*] --> Serving
+        Serving : age below TTL 600s
+        Serving : served as a hit, stale=false
+    }
+    Fresh --> SWRWindow : age reaches TTL
+    state "SWR window" as SWRWindow
+    SWRWindow : TTL to TTL+60s
+    SWRWindow : serve cached and refresh in background
+    SWRWindow --> Fresh : background refresh succeeds
+    SWRWindow --> Expired : age reaches TTL+60s
+    Expired --> Revalidating : next request, synchronous
+    Revalidating --> Fresh : 200 or all 304
+    Revalidating --> StaleServed : upstream error and age below 24h
+    Revalidating --> NegativeCached : 404, entry deleted
+    state "Stale served" as StaleServed
+    StaleServed : 200 with stale=true, Cache-Control no-cache
+    StaleServed --> Revalidating : next request retries upstream
+    StaleServed --> Errored : age reaches max-stale 24h
+    state "Error returned" as Errored
+    Errored : problem 502, 503 or 504
+    Errored --> Fresh : upstream recovers

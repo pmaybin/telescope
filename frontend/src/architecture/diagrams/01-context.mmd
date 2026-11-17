@@ -1,0 +1,57 @@
+flowchart LR
+    user(["Browser SPA"])
+
+    subgraph web["web container: nginx"]
+        static["Static SPA assets"]
+        proxy["Reverse proxy /api/"]
+    end
+
+    subgraph api["api container: FastAPI app"]
+        direction TB
+        rid["RequestIdMiddleware"]
+        routes["Routes: list_org_repos"]
+        problems["Problem handlers RFC 9457"]
+        svc["SnapshotService"]
+        store{{"SnapshotStore"}}
+        mem["InMemorySnapshotStore LRU 256"]
+        rds["RedisSnapshotStore"]
+        gh["GitHubClient"]
+        qe["Query engine"]
+        obs["Observability: logs, metrics, traces"]
+        rid --> routes
+        routes --> svc
+        routes --> qe
+        routes -.-> problems
+        svc --> store
+        svc --> gh
+        store --- mem
+        store --- rds
+        routes -.-> obs
+        gh -.-> obs
+        svc -.-> obs
+    end
+
+    github[("GitHub REST API")]
+    redis[("Redis, optional profile")]
+
+    subgraph lgtm["otel-lgtm container"]
+        col["OTel Collector"]
+        prom["Prometheus"]
+        loki["Loki"]
+        tempo["Tempo"]
+        graf["Grafana"]
+        col --> prom
+        col --> loki
+        col --> tempo
+        prom --> graf
+        loki --> graf
+        tempo --> graf
+    end
+
+    user -->|"HTTP: SPA and API calls"| static
+    user -->|"HTTP: GET /api/orgs/org/repos"| proxy
+    proxy -->|"HTTP/1.1 plus X-Request-ID"| rid
+    gh -->|"HTTPS: paged repo list, If-None-Match"| github
+    rds -->|"RESP: snapshot JSON, 24h key TTL"| redis
+    obs -->|"OTLP/HTTP 4318: spans, metrics, logs"| col
+    user -.->|"HTTP 3000: dashboards"| graf

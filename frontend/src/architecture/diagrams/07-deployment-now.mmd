@@ -1,0 +1,35 @@
+flowchart LR
+    dev(["Developer machine"])
+    envfile[".env file, git-ignored"]
+    dev --- envfile
+
+    subgraph compose["docker compose project: telescope"]
+        subgraph web["web, built from frontend"]
+            nginx["nginx: SPA plus proxy /api/ to api:8000"]
+        end
+        subgraph api["api, built from backend"]
+            uv["uvicorn plus FastAPI on 8000"]
+        end
+        subgraph lgtm["lgtm, grafana/otel-lgtm 0.41.0"]
+            graf["Grafana 3000, provisioned dashboard"]
+            otlp["OTLP receiver 4317 gRPC and 4318 HTTP"]
+        end
+        subgraph redisp["redis, profile redis"]
+            rds[("redis:7-alpine 6379")]
+        end
+    end
+
+    gh[("api.github.com")]
+
+    envfile -->|"GITHUB_TOKEN, optional, empty means tokenless"| uv
+    envfile -->|"CACHE_BACKEND, CACHE_TTL_SECONDS, LOG_LEVEL"| uv
+
+    dev -->|"localhost 8080"| nginx
+    dev -->|"localhost 8000 direct API"| uv
+    dev -->|"localhost 3000"| graf
+    nginx -->|"HTTP"| uv
+    uv -->|"HTTPS"| gh
+    uv -->|"OTLP/HTTP lgtm:4318"| otlp
+    uv -.->|"CACHE_BACKEND=redis, REDIS_URL redis:6379"| rds
+    web -.->|"depends_on"| api
+    api -.->|"depends_on service_healthy"| lgtm

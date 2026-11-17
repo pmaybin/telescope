@@ -69,7 +69,7 @@ class GitHubClient:
         max_retries: int = 3,
         backoff_base_s: float = 0.5,
         backoff_max_s: float = 8.0,
-        page_concurrency: int = 4,
+        page_concurrency: int = 8,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         rng: random.Random | None = None,
         now: Callable[[], datetime] = _utc_now,

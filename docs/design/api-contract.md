@@ -57,7 +57,7 @@ Opaque `base64url(JSON)`:
   },
   "snapshot": {
     "id": "string", "fetched_at": "RFC3339", "repo_count": 2731,   // count before filters
-    "stale": false,                        // true if served past TTL because upstream failed or is revalidating
+    "stale": false,                        // true only when served past TTL+SWR because upstream failed (within the 60s SWR window, cached data is served as fresh while a background refresh runs)
     "cursor_from_older_snapshot": false
   },
   "rate_limit": {                          // last observed GitHub state; null fields if unknown

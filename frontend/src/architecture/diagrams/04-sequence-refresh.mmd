@@ -1,0 +1,51 @@
+sequenceDiagram
+    autonumber
+    actor B as Browser
+    participant R as Route
+    participant S as SnapshotService
+    participant G as GitHubClient
+    participant H as GitHub API
+    participant St as SnapshotStore
+
+    B->>R: GET /api/orgs/google/repos
+    R->>S: get("google")
+    S->>St: get("google")
+    St-->>S: cached snapshot, age computed from fetched_at
+
+    alt age below TTL 600s
+        S-->>R: cached, stale=false
+    else age between TTL and TTL+60s, SWR window
+        S-->>R: cached, stale=false, returned immediately
+        S-)G: background refresh, single-flight
+    else age beyond TTL+60s, revalidate synchronously
+        S->>G: fetch_org_repos(org, previous)
+        loop each page n, bounded at 8
+            G->>H: GET page n with If-None-Match from previous.page_etags
+            alt 304 Not Modified
+                H-->>G: 304
+                Note over G: reuse previous repos slice for page n
+            else 200 changed
+                H-->>G: 200 plus new ETag
+            end
+        end
+        alt every page 304 and same page count
+            G-->>S: previous.with_fetched_at(now), same snapshot id
+            Note over S: cursors stay valid
+            S->>St: set(org, snapshot)
+            S-->>R: fresh, stale=false
+        else some page changed
+            G-->>S: new Snapshot with new content-hash id
+            S->>St: set(org, snapshot)
+            S-->>R: fresh, stale=false
+        else upstream error after retries
+            G-->>S: UpstreamError
+            alt age below max_stale 24h
+                S-->>R: cached, stale=true
+                Note over R: 200 with snapshot.stale=true and Cache-Control no-cache
+            else older than max_stale
+                S-->>R: re-raise the UpstreamError
+                R-->>B: problem 503, 502 or 504
+            end
+        end
+    end
+    R-->>B: 200 RepoPage

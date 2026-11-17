@@ -1,0 +1,195 @@
+classDiagram
+    direction LR
+
+    class RepoType {
+        <<enumeration>>
+        all
+        sources
+        forks
+    }
+    class SortField {
+        <<enumeration>>
+        stars
+        updated
+        pushed
+        name
+    }
+    class SortOrder {
+        <<enumeration>>
+        asc
+        desc
+    }
+    class RepoQuery {
+        language: str?
+        min_stars: int?
+        archived: bool?
+        type: RepoType
+        sort: SortField
+        order: SortOrder?
+        limit: int
+        cursor: str?
+        offset: int?
+        effective_order() SortOrder
+    }
+    class License {
+        spdx_id: str?
+        name: str
+    }
+    class Repo {
+        <<frozen>>
+        id: int
+        full_name: str
+        language: str?
+        stars: int
+        archived: bool
+        fork: bool
+        pushed_at: datetime?
+    }
+    class PageInfo {
+        limit: int
+        total: int
+        has_next: bool
+        has_prev: bool
+        next_cursor: str?
+        prev_cursor: str?
+        offset: int?
+    }
+    class SnapshotInfo {
+        id: str
+        fetched_at: datetime
+        repo_count: int
+        stale: bool
+        cursor_from_older_snapshot: bool
+    }
+    class RateLimitInfo {
+        authenticated: bool
+        limit: int?
+        remaining: int?
+        reset_at: datetime?
+    }
+    class RepoPage {
+        org: str
+        items: Repo[]
+        page: PageInfo
+        snapshot: SnapshotInfo
+        rate_limit: RateLimitInfo
+    }
+    class Problem {
+        type: str
+        title: str
+        status: int
+        detail: str?
+        request_id: str?
+        retry_after: int?
+    }
+    class Snapshot {
+        <<frozen>>
+        org: str
+        repos: Repo[]
+        fetched_at: datetime
+        page_etags: dict
+        id: str
+        with_fetched_at() Snapshot
+    }
+    class RateLimitState {
+        <<frozen>>
+        authenticated: bool
+        limit: int?
+        remaining: int?
+        reset_at: datetime?
+        to_info() RateLimitInfo
+    }
+    class SnapshotStore {
+        <<interface>>
+        get(key) Snapshot?
+        set(key, snapshot)
+        delete(key)
+    }
+    class InMemorySnapshotStore {
+        max_entries: int
+    }
+    class RedisSnapshotStore {
+        key_prefix: str
+        ttl_s: int
+    }
+    class SnapshotService {
+        ttl_s: 600
+        stale_while_revalidate_s: 60
+        max_stale_s: 86400
+        negative_ttl_s: 60
+        get(org) CachedSnapshot
+        aclose()
+    }
+    class CachedSnapshot {
+        <<frozen>>
+        snapshot: Snapshot
+        stale: bool
+    }
+    class GitHubClient {
+        page_concurrency: int
+        max_retries: int
+        rate_limit: RateLimitState
+        fetch_org_repos(org, previous) Snapshot
+    }
+    class QueryResult {
+        items: Repo[]
+        page: PageInfo
+        cursor_from_older_snapshot: bool
+    }
+    class Cursor {
+        <<frozen>>
+        query_hash: str
+        snapshot_id: str
+        sort_value: int|str|None
+        id: int
+        direction: next|prev
+    }
+
+    class TelescopeError {
+        slug
+        status
+        title
+    }
+    class OrgNotFound
+    class InvalidCursor
+    class InvalidPagination
+    class UpstreamError
+    class UpstreamRateLimited {
+        retry_after: int
+        secondary: bool
+        pages_needed: int?
+    }
+    class UpstreamUnavailable
+    class UpstreamTimeout
+
+    RepoQuery --> RepoType
+    RepoQuery --> SortField
+    RepoQuery --> SortOrder
+    Repo --> License
+    RepoPage *-- Repo
+    RepoPage *-- PageInfo
+    RepoPage *-- SnapshotInfo
+    RepoPage *-- RateLimitInfo
+    Snapshot *-- Repo
+    RateLimitState ..> RateLimitInfo : to_info
+    SnapshotStore <|.. InMemorySnapshotStore
+    SnapshotStore <|.. RedisSnapshotStore
+    SnapshotService o-- SnapshotStore
+    SnapshotService ..> GitHubClient : Fetcher
+    SnapshotService ..> CachedSnapshot
+    CachedSnapshot --> Snapshot
+    GitHubClient --> RateLimitState
+    GitHubClient ..> Snapshot : builds
+    QueryResult --> PageInfo
+    QueryResult --> Repo
+    QueryResult ..> Cursor : encodes
+    RepoQuery ..> QueryResult : run_query
+
+    TelescopeError <|-- OrgNotFound
+    TelescopeError <|-- InvalidCursor
+    TelescopeError <|-- InvalidPagination
+    TelescopeError <|-- UpstreamError
+    UpstreamError <|-- UpstreamRateLimited
+    UpstreamError <|-- UpstreamUnavailable
+    UpstreamError <|-- UpstreamTimeout
+    TelescopeError ..> Problem : mapped to
