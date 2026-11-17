@@ -1,8 +1,14 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI
 
 from telescope.api.routes import router
+from telescope.observability.logging import configure_logging
+from telescope.observability.middleware import RequestIdMiddleware
+from telescope.observability.otel import configure_otel, shutdown_otel
+from telescope.settings import Settings
 
 PROBLEM_JSON = "application/problem+json"
 
@@ -26,7 +32,17 @@ def _problem_json_openapi(app: FastAPI) -> dict[str, Any]:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Telescope API", version="0.1.0")
+    settings = Settings()
+    token = settings.github_token.get_secret_value() if settings.github_token else None
+    configure_logging(settings.log_level, token=token)
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        yield
+        shutdown_otel()
+
+    app = FastAPI(title="Telescope API", version="0.1.0", lifespan=lifespan)
+    app.add_middleware(RequestIdMiddleware)
     app.include_router(router)
 
     @app.get("/healthz", include_in_schema=False)
@@ -34,6 +50,7 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     app.openapi = lambda: _problem_json_openapi(app)  # type: ignore[method-assign]
+    configure_otel(app, settings)
     return app
 
 
