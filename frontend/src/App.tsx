@@ -1,10 +1,15 @@
+import { Info, SearchX, TriangleAlert } from 'lucide-react'
 import { useMemo } from 'react'
 import type { RepoQuery } from './api/client'
-import { Controls } from './components/Controls'
-import { OrgForm } from './components/OrgForm'
+import { AppShell } from './components/AppShell'
+import { FilterBar } from './components/FilterBar'
+import { OrgHeader } from './components/OrgHeader'
+import { Pagination } from './components/Pagination'
 import { ProblemView } from './components/ProblemView'
-import { RepoTable } from './components/RepoTable'
-import { absoluteTime, formatNumber, ORG_PATTERN, PAGE_SIZES } from './format'
+import { RepoTable, SkeletonTable } from './components/RepoTable'
+import { StartState } from './components/StartState'
+import { StateView } from './components/StateView'
+import { absoluteTime, ORG_PATTERN, PAGE_SIZES } from './format'
 import { useRepos } from './useRepos'
 import { useUrlState } from './useUrlState'
 
@@ -13,16 +18,7 @@ const oneOf = <T extends string>(
   allowed: readonly T[],
 ): T | undefined => allowed.find((a) => a === v)
 
-const FILTER_KEYS = [
-  'language',
-  'min_stars',
-  'archived',
-  'type',
-  'sort',
-  'order',
-  'limit',
-  'paging',
-]
+const FILTER_KEYS = ['language', 'min_stars', 'archived', 'type']
 
 function App() {
   const { params, update } = useUrlState()
@@ -75,179 +71,191 @@ function App() {
     query,
   )
 
+  // Ignore data that belongs to a previously viewed organisation.
+  const shown =
+    data && org && data.org.toLowerCase() === org.toLowerCase() ? data : null
+
   const languages = useMemo(
     () =>
       [
         ...new Set(
-          (data?.items ?? [])
+          (shown?.items ?? [])
             .map((r) => r.language)
             .filter((l): l is string => !!l),
         ),
       ].sort(),
-    [data],
+    [shown],
   )
 
   const clearFilters = () =>
     update(Object.fromEntries(FILTER_KEYS.map((k) => [k, undefined])))
+  const loadOrg = (o: string) => update({ org: o })
+  const restart = () => update({ cursor: undefined, offset: undefined })
+
+  const effectiveOrder = order ?? (sort === 'name' ? 'asc' : 'desc')
+  const onSort = (col: 'name' | 'stars' | 'updated') => {
+    const same = col === sort || (col === 'updated' && sort === 'pushed')
+    if (same) update({ order: effectiveOrder === 'asc' ? 'desc' : 'asc' })
+    else update({ sort: col, order: undefined })
+  }
+
+  const filtersActive =
+    !!language ||
+    minStars !== undefined ||
+    archived !== undefined ||
+    type !== 'all'
+  const showFilters = !(problem && problem.status === 404)
+  const firstLoad = loading && !shown && !problem
+
+  let content: React.ReactNode = null
+  if (problem) {
+    content = (
+      <ProblemView
+        problem={problem}
+        retryAfterHeader={retryAfterHeader}
+        onRetry={retry}
+        onRestart={restart}
+        onPickOrg={loadOrg}
+      />
+    )
+  } else if (firstLoad) {
+    content = (
+      <>
+        <div className="loading-hint" role="status">
+          <span className="spinner" aria-hidden="true" />
+          Fetching all repositories from GitHub. Large orgs can take a few
+          seconds.
+        </div>
+        <SkeletonTable
+          rows={Math.min(limit, 10)}
+          sort={sort}
+          order={effectiveOrder}
+        />
+        <div className="pagination" aria-hidden="true">
+          <span className="skel" style={{ width: 120 }} />
+        </div>
+      </>
+    )
+  } else if (shown) {
+    const empty = shown.items.length === 0
+    content = (
+      <>
+        {shown.snapshot.stale && (
+          <p role="status" className="alert-inline" data-tone="warning">
+            <TriangleAlert size={14} aria-hidden="true" />
+            <span>
+              Showing cached data from {absoluteTime(shown.snapshot.fetched_at)}
+              ; GitHub is currently unavailable.
+            </span>
+          </p>
+        )}
+        {shown.snapshot.cursor_from_older_snapshot && (
+          <p role="status" className="alert-inline" data-tone="info">
+            <Info size={14} aria-hidden="true" />
+            <span>Data refreshed while paging; order may have shifted.</span>
+          </p>
+        )}
+        {empty ? (
+          <StateView
+            role="status"
+            icon={SearchX}
+            title={
+              filtersActive
+                ? 'No repositories match these filters'
+                : 'No repositories to show'
+            }
+            actions={
+              filtersActive ? (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={clearFilters}
+                >
+                  Clear filters
+                </button>
+              ) : undefined
+            }
+          >
+            <p>
+              {filtersActive
+                ? 'Try a different language, lower the minimum stars or remove a filter.'
+                : 'There is nothing on this page.'}
+            </p>
+          </StateView>
+        ) : (
+          <RepoTable
+            items={shown.items}
+            sort={sort}
+            order={effectiveOrder}
+            dimmed={loading}
+            onSort={onSort}
+          />
+        )}
+        {!(empty && shown.page.total === 0) && (
+          <Pagination
+            data={shown}
+            paging={paging}
+            offset={offset}
+            limit={limit}
+            onChange={update}
+          />
+        )}
+      </>
+    )
+  }
 
   return (
-    <main>
-      <h1>Telescope</h1>
-      <OrgForm org={rawOrg} onSubmit={(o) => update({ org: o })} />
+    <AppShell
+      org={rawOrg}
+      rateLimit={data?.rate_limit ?? null}
+      onSubmit={loadOrg}
+    >
+      {!rawOrg && <StartState onPick={loadOrg} />}
 
       {rawOrg && !org && (
-        <p role="alert" className="error">
-          “{rawOrg}” is not a valid GitHub organisation login.
-        </p>
-      )}
-
-      {!rawOrg && (
-        <p role="status" className="muted">
-          Enter a GitHub organisation above to list its repositories.
-        </p>
+        <section className="card">
+          <StateView
+            role="alert"
+            icon={TriangleAlert}
+            tone="danger"
+            title="Not a valid organisation"
+          >
+            <p>“{rawOrg}” is not a valid GitHub organisation login.</p>
+          </StateView>
+        </section>
       )}
 
       {org && (
         <>
-          <Controls
-            language={language}
-            minStars={minStarsRaw}
-            archived={archived ?? ''}
-            type={type}
-            sort={sort}
-            order={order ?? ''}
-            limit={String(limit)}
-            paging={paging}
-            languages={languages}
-            onChange={update}
-          />
-
-          {loading && (
-            <p role="status">
-              Loading… (first load of a large org can take a few seconds)
-            </p>
-          )}
-
-          {problem && (
-            <ProblemView
-              problem={problem}
-              retryAfterHeader={retryAfterHeader}
-              onRetry={retry}
-              onRestart={() => update({ cursor: undefined, offset: undefined })}
+          {showFilters && <OrgHeader org={org} data={shown} />}
+          {showFilters && (
+            <FilterBar
+              language={language}
+              minStars={minStarsRaw}
+              archived={archived ?? ''}
+              type={type}
+              sort={sort}
+              order={effectiveOrder}
+              limit={String(limit)}
+              paging={paging}
+              languages={languages}
+              onChange={update}
+              onReset={clearFilters}
             />
           )}
-
-          {data && data.snapshot.stale && (
-            <p role="status" className="banner">
-              Showing cached data from {absoluteTime(data.snapshot.fetched_at)};
-              GitHub is currently unavailable.
-            </p>
-          )}
-          {data && data.snapshot.cursor_from_older_snapshot && (
-            <p role="status" className="banner">
-              Data refreshed while paging; order may have shifted.
-            </p>
-          )}
-
-          {data && data.items.length === 0 && !loading && !problem && (
-            <p role="status">
-              No repositories match these filters.{' '}
-              <button type="button" onClick={clearFilters}>
-                Clear filters
-              </button>
-            </p>
-          )}
-
-          {data && data.items.length > 0 && (
-            <RepoTable items={data.items} sort={sort} dimmed={loading} />
-          )}
-
-          {data && paging === 'offset' && data.page.total > 0 && (
-            <nav className="pager" aria-label="Pagination">
-              <button
-                type="button"
-                disabled={offset === 0}
-                onClick={() => update({ offset: undefined })}
-              >
-                First
-              </button>{' '}
-              <button
-                type="button"
-                disabled={offset === 0}
-                onClick={() =>
-                  update({ offset: String(Math.max(0, offset - limit)) })
-                }
-              >
-                Prev
-              </button>{' '}
-              <button
-                type="button"
-                disabled={offset + limit >= data.page.total}
-                onClick={() => update({ offset: String(offset + limit) })}
-              >
-                Next
-              </button>{' '}
-              <button
-                type="button"
-                disabled={offset + limit >= data.page.total}
-                onClick={() =>
-                  update({
-                    offset: String(
-                      (Math.ceil(data.page.total / limit) - 1) * limit,
-                    ),
-                  })
-                }
-              >
-                Last
-              </button>{' '}
-              <span>
-                Page {formatNumber(Math.floor(offset / limit) + 1)} of{' '}
-                {formatNumber(Math.max(1, Math.ceil(data.page.total / limit)))}{' '}
-                ({formatNumber(data.page.total)} matching in {data.org})
-              </span>
-            </nav>
-          )}
-
-          {data && paging === 'cursor' && data.items.length > 0 && (
-            <>
-              <nav className="pager" aria-label="Pagination">
-                <button
-                  type="button"
-                  disabled={!data.page.has_prev || !data.page.prev_cursor}
-                  onClick={() =>
-                    update({ cursor: data.page.prev_cursor ?? undefined })
-                  }
-                >
-                  Prev
-                </button>{' '}
-                <button
-                  type="button"
-                  disabled={!data.page.has_next || !data.page.next_cursor}
-                  onClick={() =>
-                    update({ cursor: data.page.next_cursor ?? undefined })
-                  }
-                >
-                  Next
-                </button>{' '}
-                <span>
-                  Showing {formatNumber(data.items.length)} of{' '}
-                  {formatNumber(data.page.total)} matching (
-                  {formatNumber(data.snapshot.repo_count)} repos in {data.org})
-                </span>
-              </nav>
-            </>
-          )}
-
-          {data && (
-            <footer className="muted">
-              GitHub rate limit: {data.rate_limit.remaining ?? '?'}/
-              {data.rate_limit.limit ?? '?'} remaining, authenticated:{' '}
-              {data.rate_limit.authenticated ? 'yes' : 'no'}
-            </footer>
-          )}
+          <section className="card results" aria-label="Repositories">
+            {loading && shown && !problem && (
+              <div
+                className="progress"
+                role="progressbar"
+                aria-label="Refreshing"
+              />
+            )}
+            {content}
+          </section>
         </>
       )}
-    </main>
+    </AppShell>
   )
 }
 

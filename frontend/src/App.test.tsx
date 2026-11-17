@@ -34,7 +34,7 @@ describe('App', () => {
   it('validates the org login client-side', async () => {
     open('')
     await userEvent.type(screen.getByLabelText('Organisation'), '-bad-')
-    await userEvent.click(screen.getByRole('button', { name: 'Load' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Explore' }))
     expect(screen.getByRole('alert')).toHaveTextContent(
       /valid GitHub organisation/i,
     )
@@ -52,21 +52,22 @@ describe('App', () => {
     )
     open('')
     await userEvent.type(screen.getByLabelText('Organisation'), 'acme')
-    await userEvent.click(screen.getByRole('button', { name: 'Load' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Explore' }))
 
     const link = await screen.findByRole('link', { name: 'guava' })
     expect(link).toHaveAttribute('href', 'https://github.com/acme/guava')
     expect(link).toHaveAttribute('target', '_blank')
-    expect(screen.getAllByText('12,345')).toHaveLength(2)
+    expect(screen.getAllByText('12.3k')).toHaveLength(2)
+    expect(screen.getAllByTitle('12,345 stars')).toHaveLength(2)
     expect(screen.getByText('archived')).toBeInTheDocument()
     expect(screen.getByText('fork')).toBeInTheDocument()
     expect(window.location.search).toBe('?org=acme')
     expect(seen).toHaveLength(1)
     expect(seen[0]?.get('sort')).toBe('stars')
     expect(seen[0]?.get('limit')).toBe('30')
-    expect(screen.getByText(/rate limit: 31\/60/i)).toHaveTextContent(
-      'authenticated: no',
-    )
+    expect(
+      screen.getByLabelText(/rate limit: 31 of 60 remaining \(anonymous\)/i),
+    ).toBeInTheDocument()
   })
 
   it('renders placeholders for null description and language', async () => {
@@ -158,7 +159,7 @@ describe('App', () => {
     )
     open('?org=acme&cursor=junk')
     await userEvent.click(
-      await screen.findByRole('button', { name: /restart from first page/i }),
+      await screen.findByRole('button', { name: /back to first page/i }),
     )
     expect(
       await screen.findByRole('link', { name: 'guava' }),
@@ -215,7 +216,7 @@ describe('App', () => {
     const seen = serve(() => makePage())
     open('?org=acme&cursor=CUR1')
     await screen.findByRole('link', { name: 'guava' })
-    await userEvent.selectOptions(screen.getByLabelText('Type'), 'forks')
+    await userEvent.click(screen.getByRole('radio', { name: 'Forks' }))
     await waitFor(() => expect(seen.at(-1)?.get('type')).toBe('forks'))
     expect(seen.at(-1)?.has('cursor')).toBe(false)
     expect(window.location.search).toBe('?org=acme&type=forks')
@@ -268,12 +269,81 @@ describe('App', () => {
     open('?org=acme&paging=offset&offset=20&limit=10')
     await screen.findByRole('link', { name: 'guava' })
     expect(seen.at(-1)?.get('offset')).toBe('20')
-    await userEvent.selectOptions(screen.getByLabelText('Type'), 'forks')
+    await userEvent.click(screen.getByRole('radio', { name: 'Forks' }))
     await waitFor(() => expect(seen.at(-1)?.get('type')).toBe('forks'))
     expect(seen.at(-1)?.get('offset')).toBe('0')
     expect(window.location.search).not.toContain('offset=')
     await userEvent.selectOptions(screen.getByLabelText('Paging'), 'cursor')
     await waitFor(() => expect(seen.at(-1)?.has('offset')).toBe(false))
     expect(window.location.search).not.toContain('paging=')
+  })
+
+  it('clicking a column header sorts by it and a second click flips the order', async () => {
+    const seen = serve(() => makePage())
+    open('?org=acme')
+    await screen.findByRole('link', { name: 'guava' })
+    await userEvent.click(screen.getByRole('button', { name: 'Name' }))
+    await waitFor(() => expect(seen.at(-1)?.get('sort')).toBe('name'))
+    expect(window.location.search).toBe('?org=acme&sort=name')
+    expect(screen.getByLabelText('Sort')).toHaveValue('name')
+    await userEvent.click(screen.getByRole('button', { name: 'Name' }))
+    await waitFor(() => expect(seen.at(-1)?.get('order')).toBe('desc'))
+    expect(window.location.search).toContain('order=desc')
+  })
+
+  it('the order toggle flips the order', async () => {
+    const seen = serve(() => makePage())
+    open('?org=acme')
+    await screen.findByRole('link', { name: 'guava' })
+    await userEvent.click(
+      screen.getByRole('button', { name: /^order: descending/i }),
+    )
+    await waitFor(() => expect(seen.at(-1)?.get('order')).toBe('asc'))
+    expect(window.location.search).toBe('?org=acme&order=asc')
+    await userEvent.click(
+      screen.getByRole('button', { name: /^order: ascending/i }),
+    )
+    await waitFor(() => expect(seen.at(-1)?.get('order')).toBe('desc'))
+  })
+
+  it('example org chips load an organisation', async () => {
+    const seen = serve(() => makePage({ org: 'google' }))
+    open('')
+    await userEvent.click(screen.getByRole('button', { name: 'google' }))
+    expect(
+      await screen.findByRole('link', { name: 'guava' }),
+    ).toBeInTheDocument()
+    expect(window.location.search).toBe('?org=google')
+    expect(seen).toHaveLength(1)
+  })
+
+  it('filter chips are removable and Reset clears all filters', async () => {
+    serve(() => makePage())
+    open('?org=acme&language=Go&type=forks')
+    await screen.findByRole('link', { name: 'guava' })
+    await userEvent.click(
+      screen.getByRole('button', { name: /remove filter language: go/i }),
+    )
+    expect(window.location.search).toBe('?org=acme&type=forks')
+    await userEvent.click(screen.getByRole('button', { name: 'Reset' }))
+    expect(window.location.search).toBe('?org=acme')
+  })
+
+  it('theme toggle flips data-theme and persists the choice', async () => {
+    localStorage.removeItem('telescope-theme')
+    document.documentElement.removeAttribute('data-theme')
+    open('')
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Switch to dark theme' }),
+    )
+    expect(document.documentElement).toHaveAttribute('data-theme', 'dark')
+    expect(localStorage.getItem('telescope-theme')).toBe('dark')
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Switch to light theme' }),
+    )
+    expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    expect(localStorage.getItem('telescope-theme')).toBe('light')
+    localStorage.removeItem('telescope-theme')
+    document.documentElement.removeAttribute('data-theme')
   })
 })

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 
 type Props = {
   id: string
@@ -9,6 +10,9 @@ type Props = {
   min?: number
   list?: string
   placeholder?: string
+  title?: string
+  /** Leading adornment (icon); renders the input inside an input group. */
+  icon?: ReactNode
 }
 
 /** Text input that commits on Enter/blur, or after the user pauses typing. */
@@ -16,6 +20,7 @@ export function DebouncedInput({
   value,
   onCommit,
   delayMs = 300,
+  icon,
   ...rest
 }: Props) {
   const [draft, setDraft] = useState(value)
@@ -44,9 +49,10 @@ export function DebouncedInput({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft, delayMs])
 
-  return (
+  const input = (
     <input
       {...rest}
+      className="input"
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={() => commit(draft)}
@@ -54,5 +60,13 @@ export function DebouncedInput({
         if (e.key === 'Enter') commit(draft)
       }}
     />
+  )
+  return icon ? (
+    <div className="input-group">
+      {icon}
+      {input}
+    </div>
+  ) : (
+    input
   )
 }
