@@ -8,7 +8,7 @@ Works with no `.env` (tokenless GitHub access, 60 requests/hour) and with one (c
 | `web` | `../frontend` (nginx, SPA plus `/api/` proxy to `api`) | 8080 | http://localhost:8080 |
 | `api` | `../backend` (FastAPI, uvicorn, non-root) | 8000 | http://localhost:8000/docs |
 | `lgtm` | `grafana/otel-lgtm:0.41.0` (Grafana, Loki, Tempo, Prometheus, collector) | 3000, 4317 (OTLP gRPC), 4318 (OTLP HTTP) | http://localhost:3000 |
-| `redis` | commented-out placeholder under the `redis` profile (stretch bead) | | |
+| `redis` | `redis:7-alpine`, optional (`COMPOSE_PROFILES=redis` plus `CACHE_BACKEND=redis`) | 6379 | |
 
 ## Dashboard
 

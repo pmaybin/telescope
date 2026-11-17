@@ -27,3 +27,7 @@
 - r1 (10:35): fetch-all confirmed; google has about 30 pages at per_page=100; **unauthenticated 304s count against the limit** (observed), so ETags only save quota with a token. → ADR 0002/0003/0007
 - r2 (10:36): otel-lgtm 0.41.0; datasource UIDs prometheus/loki/tempo; dashboards mount at /otel-lgtm/grafana/conf/provisioning/dashboards/custom. → ADR 0009
 - r3 (10:36): openapi-typescript + openapi-fetch; openapi-msw for typed MSW handlers. → ADR 0010
+
+## Wrap-up (10:51Z)
+- All beads closed, including both stretch beads (tel-offset, tel-redis). Verified end to end in compose: tokenless and with a PAT, the Redis profile, and the dashboard, logs and traces.
+- Secrets scan: the real token is absent from git history and tracked files; the only `ghp_` strings are fake fixtures in the redaction tests.

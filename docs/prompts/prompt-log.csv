@@ -499,3 +499,93 @@ Existing building blocks (read them): `telescope.github.GitHubClient` (`fetch_or
 - Quality bar: mypy --strict clean, ruff clean, and tests that are meaningful, fast and **parallel-safe** (`pytest -n auto`: no shared mutable module state, no real network, no real sleeps; inject clocks and sleep functions). **Never call the real GitHub API in tests**; use `respx`. Logging: `logger = logging.getLogger(__name__)`, structured fields via `extra={...}`, and never log tokens or the Authorization header.
 - Before replying, run `cd backend && uv run pytest && uv run ruff check && uv run ruff format --check && uv run mypy src` (or the frontend equivalents) and make them pass. Reply in ≤200 words: the files changed, the public API you exposed, the test count and results, and any open concerns.
 "
+2026-11-17T10:42:39Z,architect,architect,subagent,claude-sonnet-5-5,medium,tel-redis,Implement Redis snapshot store (stretch),"# Bead tel-redis (stretch): Redis snapshot store
+**Your files:** `backend/src/telescope/cache/redis_store.py`, `backend/src/telescope/cache/__init__.py` (export only), `backend/tests/cache/test_redis_store.py`, `backend/src/telescope/settings.py` (add settings only), `backend/pyproject.toml`/`uv.lock` (you may `uv add redis` and `uv add --dev fakeredis`), and `infra/docker-compose.yml` (the redis service only). **Do not** touch `backend/src/telescope/api/**` or `main.py`; another agent owns them right now, and the architect will wire the backend selection afterwards.
+
+1. `RedisSnapshotStore(client: redis.asyncio.Redis, *, key_prefix: str = ""telescope:snapshot:"", ttl_s: int = 86400)` implements the `SnapshotStore` protocol from `telescope.cache.store` (get/set/delete). Serialise `Snapshot` as JSON: org, fetched_at ISO, page_etags (with string keys converted back to int), id, and the repos via `Repo.model_dump(mode=""json"")`. Deserialise back, keeping the **same id**. Set the Redis key TTL to `ttl_s` (this is the max-stale horizon; freshness is still decided by SnapshotService from fetched_at). If a stored payload is corrupt, log a WARNING and treat it as a miss. Note in a docstring that single-flight stays per-process (cross-replica coalescing would need a Redis lock; out of scope).
+2. Settings: `cache_backend: Literal[""memory"", ""redis""] = ""memory""` (env `CACHE_BACKEND`) and `redis_url: str = ""redis://localhost:6379/0""` (env `REDIS_URL`).
+3. Compose: replace the commented placeholder with a real `redis:7-alpine` service under `profiles: [""redis""]`, with a healthcheck. Add `CACHE_BACKEND: ${CACHE_BACKEND:-memory}` and `REDIS_URL: redis://redis:6379/0` to the api environment. Don't add depends_on to api, since the profile is optional.
+4. Tests with `fakeredis.aioredis.FakeRedis`: round trip preserving equality and id; a miss; delete; TTL set; corrupt payload → miss; and the store working under `SnapshotService` (a hit after a set).
+## Shared context (every build agent)
+- Repo: /home/paul/.t3/projects/telescope. This is a timeboxed senior take-home: ""telescope"" serves `GET /api/orgs/{org}/repos` (FastAPI, Python 3.12, uv) to a React+TS frontend (Vite, pnpm). Read `docs/design/api-contract.md` (the intended semantics), `backend/src/telescope/models.py` (contract and domain types: `Repo`, `Snapshot`, `RateLimitState`, `RepoQuery`…), `backend/src/telescope/errors.py` (domain exceptions) and `backend/src/telescope/observability/metrics.py` (the metrics facade: call these functions and don't import OTel elsewhere). Research notes are in `docs/research/` if relevant.
+- **Do not change** `models.py`, `errors.py` or `openapi.json`. If you believe the contract needs a change, stop and say so in your reply instead.
+- Tools: run commands via `mise exec -- …` (pnpm is only on PATH through mise). Beads: `env -u BEADS_DIR bd …` (a global env var points elsewhere). Start with `env -u BEADS_DIR bd update <bead> --status in_progress`. **Don't close the bead and don't git commit**: the architect reviews and commits. Other agents are working in parallel on other directories: **only touch the files listed as yours**. Don't run `uv add`/`pnpm add` unless your brief allows it.
+- Quality bar: mypy --strict clean, ruff clean, and tests that are meaningful, fast and **parallel-safe** (`pytest -n auto`: no shared mutable module state, no real network, no real sleeps; inject clocks and sleep functions). **Never call the real GitHub API in tests**; use `respx`. Logging: `logger = logging.getLogger(__name__)`, structured fields via `extra={...}`, and never log tokens or the Authorization header.
+- Before replying, run `cd backend && uv run pytest && uv run ruff check && uv run ruff format --check && uv run mypy src` (or the frontend equivalents) and make them pass. Reply in ≤200 words: the files changed, the public API you exposed, the test count and results, and any open concerns.
+"
+2026-11-17T10:44:44Z,architect,architect,subagent,claude-sonnet-5-5,medium,tel-offset,Implement offset pagination mode (stretch),"# Bead tel-offset (stretch): offset/limit pagination alongside cursor
+The human wants cursor pagination as the default, with offset as an alternative. **This bead explicitly authorises a small contract change.**
+
+**Your files:** `backend/src/telescope/models.py` (RepoQuery and PageInfo only), `backend/src/telescope/errors.py` (add one class), `backend/src/telescope/query/**`, `backend/src/telescope/api/routes.py` (only if needed), `backend/tests/query/**`, `backend/tests/api/**`, `openapi.json` + `frontend/src/api/schema.d.ts` (via `mise exec -- make gen-client` from the repo root), `frontend/src/**`, and `docs/adr/0004-pagination.md` (add a short ""Update: offset implemented"" section) plus `docs/design/api-contract.md` (offset rows).
+
+1. `RepoQuery.offset: int | None` (ge=0, le=100_000, with a description saying it is mutually exclusive with `cursor`). `PageInfo.offset: int | None` (set in offset mode, null in cursor mode). Add `errors.InvalidPagination(slug=""invalid-pagination"", status=400, title=""Invalid pagination"")`. Cursor + offset together → InvalidPagination. The existing problem handler maps TelescopeError subclasses generically; verify it.
+2. Engine: in offset mode, use the same filter/sort and slice `[offset:offset+limit]`. `has_prev = offset > 0`, `has_next = offset+limit < total`, and next/prev cursors are null. An offset beyond total gives empty items with has_prev true. `query_hash` must stay the same regardless of offset (offset is pagination, not a filter). Keep cursor mode untouched.
+3. Tests: offset slicing, out of range, cursor+offset → 400 problem via the API, and that the offset walk equals the cursor walk on the same data.
+4. Frontend: add a ""Paging: cursor | offset"" select (URL param `paging`, default `cursor`). In offset mode, show ""Page X of Y"" with Prev/Next (and First/Last) driven by `offset`. Changing filters resets offset/cursor. Add 1–2 Vitest tests for offset mode (request carries `offset`, and the URL updates).
+5. Make sure `mise exec -- make lint` and `mise exec -- make test` pass from the repo root.
+## Shared context (every build agent)
+- Repo: /home/paul/.t3/projects/telescope. This is a timeboxed senior take-home: ""telescope"" serves `GET /api/orgs/{org}/repos` (FastAPI, Python 3.12, uv) to a React+TS frontend (Vite, pnpm). Read `docs/design/api-contract.md` (the intended semantics), `backend/src/telescope/models.py` (contract and domain types: `Repo`, `Snapshot`, `RateLimitState`, `RepoQuery`…), `backend/src/telescope/errors.py` (domain exceptions) and `backend/src/telescope/observability/metrics.py` (the metrics facade: call these functions and don't import OTel elsewhere). Research notes are in `docs/research/` if relevant.
+- **Do not change** `models.py`, `errors.py` or `openapi.json`. If you believe the contract needs a change, stop and say so in your reply instead.
+- Tools: run commands via `mise exec -- …` (pnpm is only on PATH through mise). Beads: `env -u BEADS_DIR bd …` (a global env var points elsewhere). Start with `env -u BEADS_DIR bd update <bead> --status in_progress`. **Don't close the bead and don't git commit**: the architect reviews and commits. Other agents are working in parallel on other directories: **only touch the files listed as yours**. Don't run `uv add`/`pnpm add` unless your brief allows it.
+- Quality bar: mypy --strict clean, ruff clean, and tests that are meaningful, fast and **parallel-safe** (`pytest -n auto`: no shared mutable module state, no real network, no real sleeps; inject clocks and sleep functions). **Never call the real GitHub API in tests**; use `respx`. Logging: `logger = logging.getLogger(__name__)`, structured fields via `extra={...}`, and never log tokens or the Authorization header.
+- Before replying, run `cd backend && uv run pytest && uv run ruff check && uv run ruff format --check && uv run mypy src` (or the frontend equivalents) and make them pass. Reply in ≤200 words: the files changed, the public API you exposed, the test count and results, and any open concerns.
+"
+2026-11-17T10:46:02Z,human,human,architect,claude-opus-5-5,high,,PAT added to .env,I have added the pat to the .env file
+2026-11-17T10:49:28Z,architect,architect,subagent,claude-sonnet-5-5,medium,tel-readme,Write root and backend READMEs,"# Bead tel-readme: READMEs
+**Your files:** `README.md` (root, replace it but keep the icon line at the top), `backend/README.md` (new). You may lightly edit `frontend/README.md` and `infra/README.md` for consistency. Don't touch code.
+
+Read first: `docs/decisions-log.md`, `docs/adr/*.md`, `docs/design/api-contract.md`, the `Makefile`, `mise.toml`, `.env.example`, `infra/docker-compose.yml`, `infra/README.md`, `frontend/README.md`, and skim `backend/src/telescope/**`. Run `git log --oneline` for the history.
+
+**Root README**, for a reviewer who will clone and run it with their own token and without one:
+1. One paragraph saying what it is, plus a screenshot placeholder is unnecessary; skip images.
+2. **Quick start:**
+   - Prerequisites: Docker with Compose v2 and make. For the local dev and test loop also uv, Node 22 and pnpm 10, or simply `mise install`.
+   - `cp .env.example .env`, optionally set `GITHUB_TOKEN` (a fine-grained PAT, public repositories read-only), then `make up`.
+   - URLs: web http://localhost:8080, API docs http://localhost:8000/docs, Grafana http://localhost:3000 (dashboard ""Telescope""). Port overrides: `WEB_PORT`, `API_PORT`, `GRAFANA_PORT`.
+   - Tokenless works too: 60 req/h, and google costs ~30 requests per cold fetch. Describe the budget guard (503 with Retry-After before burning quota) and the cache.
+   - `CACHE_BACKEND=redis` with `docker compose --profile redis` (check the compose file for the exact incantation and write it precisely).
+3. **Where the token goes:** `.env` is git-ignored → compose env → `Settings.github_token` (SecretStr) → the Authorization header, and it is redacted from logs. In production, inject it from Doppler / 1Password Connect / AWS Secrets Manager instead of a file.
+4. **Make targets table** (`make help`), with mise equivalents.
+5. **API summary:** the endpoint, a param table, an example request and a trimmed response, the error table (problem+json), and the headers. Link `docs/design/api-contract.md` and `openapi.json`.
+6. **Key design decisions and trade-offs:** a short bullet per ADR with a link. Cover:
+   - fetch-all-then-filter, and why (no server-side filters upstream; Search API capped at 1,000 results);
+   - one upstream dataset per org with `type=public` (no private leakage);
+   - the snapshot cache (TTL 600s, SWR 60s, serve stale up to 24h, single-flight, ETag revalidation, which only saves quota with a token: unauthenticated 304s count, measured);
+   - keyset cursor by default plus offset mode, snapshot id = content hash, `cursor_from_older_snapshot`;
+   - nulls last regardless of direction, empty → null, the id tiebreaker, `language=none`;
+   - 503 rather than 429 for the upstream limit;
+   - bounded concurrent page fetch (8), deviating from GitHub's serial guidance on purpose;
+   - observability through OTel → LGTM.
+7. **Measured results** (from the architect's end-to-end run on 2026-11-17):
+   - google is 2,946 repos / 30 pages. Cold fetch: 13s tokenless (concurrency 4), 7.3s with a token (concurrency 8). Warm requests take ~30ms.
+   - microsoft is 8,474 repos / 85 pages, 33s cold at concurrency 4.
+   - Tokenless with 17 requests left, microsoft was refused up front with 503 `pages_needed: 85` after 1 request.
+   - No token string appeared in the container logs.
+   - The Grafana dashboard shows HTTP RED, cache, GitHub calls, rate limit, logs and traces.
+8. **Testing:** the approach to testing the GitHub integration without calling the real API (respx at the HTTP transport level, a fixture builder producing realistic `Link` headers, and injected sleep, clock and RNG so retries and backoff are deterministic and instant). Tests run in parallel under `pytest -n auto`, and the frontend suite (Vitest + MSW via openapi-msw typed handlers) runs concurrently with the backend from `make test`. There are contract drift checks. Give the current test counts: run `mise exec -- make test` from the repo root to get them.
+9. **What I didn't get to, and how I'd approach it:**
+   - Schemathesis property tests against openapi.json.
+   - Cross-replica single-flight (a Redis lock) and refresh-ahead or warm-up for popular orgs.
+   - Progressive first load for huge orgs: stream page 1 early, or return 202 plus polling.
+   - GitHub App auth for higher limits.
+   - Webhook-driven invalidation.
+   - Alert rules (e.g. ratelimit remaining under 10%).
+   - Browser OTel/RUM.
+   - Playwright e2e against compose.
+   - CI (not wanted for this local evaluation; `make lint test` is the gate).
+   - The page/per_page mode, cut by decision because it adds little over offset.
+   - Multi-value language filters.
+   - Auth for the internal tool (SSO proxy).
+10. **How this was built:** an AI-assisted workflow, with an architect model coordinating subagents. Point to the prompt log `docs/prompts/prompt-log.csv`, the kickoff prompt, the decisions log, and the beads tracking in `.beads/`. **Time spent:** started 2026-11-17 10:29 UTC; leave a line `Finished: <TBD by architect>`.
+11. **Repo layout** tree (top 2 levels).
+
+**backend/README.md:** module map (`models`, `errors`, `github/`, `cache/`, `query/`, `api/`, `observability/`, `settings`), request flow (route → SnapshotService → GitHubClient → run_query → RepoPage), settings and env vars table, how to run locally (`uv run uvicorn telescope.main:app --reload`), the tests layout, and logging fields.
+
+Be accurate. Verify every command and env var name against the files. Keep it tight and scannable; a reviewer should get the picture in 3 minutes. Reply in ≤120 words.
+## Shared context (every build agent)
+- Repo: /home/paul/.t3/projects/telescope. This is a timeboxed senior take-home: ""telescope"" serves `GET /api/orgs/{org}/repos` (FastAPI, Python 3.12, uv) to a React+TS frontend (Vite, pnpm). Read `docs/design/api-contract.md` (the intended semantics), `backend/src/telescope/models.py` (contract and domain types: `Repo`, `Snapshot`, `RateLimitState`, `RepoQuery`…), `backend/src/telescope/errors.py` (domain exceptions) and `backend/src/telescope/observability/metrics.py` (the metrics facade: call these functions and don't import OTel elsewhere). Research notes are in `docs/research/` if relevant.
+- **Do not change** `models.py`, `errors.py` or `openapi.json`. If you believe the contract needs a change, stop and say so in your reply instead.
+- Tools: run commands via `mise exec -- …` (pnpm is only on PATH through mise). Beads: `env -u BEADS_DIR bd …` (a global env var points elsewhere). Start with `env -u BEADS_DIR bd update <bead> --status in_progress`. **Don't close the bead and don't git commit**: the architect reviews and commits. Other agents are working in parallel on other directories: **only touch the files listed as yours**. Don't run `uv add`/`pnpm add` unless your brief allows it.
+- Quality bar: mypy --strict clean, ruff clean, and tests that are meaningful, fast and **parallel-safe** (`pytest -n auto`: no shared mutable module state, no real network, no real sleeps; inject clocks and sleep functions). **Never call the real GitHub API in tests**; use `respx`. Logging: `logger = logging.getLogger(__name__)`, structured fields via `extra={...}`, and never log tokens or the Authorization header.
+- Before replying, run `cd backend && uv run pytest && uv run ruff check && uv run ruff format --check && uv run mypy src` (or the frontend equivalents) and make them pass. Reply in ≤200 words: the files changed, the public API you exposed, the test count and results, and any open concerns.
+"
