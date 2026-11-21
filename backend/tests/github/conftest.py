@@ -47,3 +47,6 @@ def make_client(http: httpx.AsyncClient, sleeper: Sleeper):  # type: ignore[no-u
         )
 
     return factory
+
+
+from api.conftest import mock  # noqa: E402, F401

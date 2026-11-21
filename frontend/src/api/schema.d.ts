@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/api/dev/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mint a short-lived dev JWT (AUTH_MODE=dev only; not a security boundary) */
+        post: operations["createDevToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/orgs/{org}/repos": {
         parameters: {
             query?: never;
@@ -25,6 +42,34 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** DevToken */
+        DevToken: {
+            /** Access Token */
+            access_token: string;
+            /**
+             * Expires In
+             * @description Seconds until the token expires.
+             */
+            expires_in: number;
+            /**
+             * Token Type
+             * @default Bearer
+             */
+            token_type: string;
+        };
+        /** DevTokenRequest */
+        DevTokenRequest: {
+            /**
+             * Sub
+             * @default dev-user
+             */
+            sub: string;
+        };
+        /** HTTPValidationError */
+        HTTPValidationError: {
+            /** Detail */
+            detail?: components["schemas"]["ValidationError"][];
+        };
         /** License */
         License: {
             /** Name */
@@ -53,10 +98,15 @@ export interface components {
             /** Prev Cursor */
             prev_cursor: string | null;
             /**
-             * Total
-             * @description Number of repositories matching the filters.
+             * Provisional Reason
+             * @description Why a provisional response (`snapshot.complete` false) has no items: there is no trustworthy first page yet. Null when complete, or when the provisional items are an exact first page.
              */
-            total: number;
+            provisional_reason?: ("preview-disabled" | "preview-skipped" | "preview-inexact" | "preview-unavailable") | null;
+            /**
+             * Total
+             * @description Number of repositories matching the filters. Null while the snapshot is still loading (`snapshot.complete` false), unless the provisional page came from Search.
+             */
+            total: number | null;
         };
         /**
          * Problem
@@ -82,6 +132,19 @@ export interface components {
             type: string;
         } & {
             [key: string]: unknown;
+        };
+        /** ProgressInfo */
+        ProgressInfo: {
+            /**
+             * Pages Done
+             * @description Upstream pages fetched so far.
+             */
+            pages_done: number;
+            /**
+             * Pages Total
+             * @description Upstream pages needed; null until page 1 lands.
+             */
+            pages_total: number | null;
         };
         /** RateLimitInfo */
         RateLimitInfo: {
@@ -149,26 +212,33 @@ export interface components {
         /** SnapshotInfo */
         SnapshotInfo: {
             /**
+             * Complete
+             * @description False while the cold load is still running: the response is provisional, paging is disabled and the client should re-request after `Retry-After`.
+             * @default true
+             */
+            complete: boolean;
+            /**
              * Cursor From Older Snapshot
              * @description True when the cursor was issued against a different snapshot; rows whose sort key changed may have moved.
              */
             cursor_from_older_snapshot: boolean;
             /**
              * Fetched At
-             * Format: date-time
-             * @description When the dataset was last fetched or revalidated.
+             * @description When the dataset was last fetched or revalidated. Null while loading.
              */
-            fetched_at: string;
+            fetched_at: string | null;
             /**
              * Id
-             * @description Content hash of the upstream dataset this page was computed from.
+             * @description Content hash of the upstream dataset this page was computed from. Null while the snapshot is still loading.
              */
-            id: string;
+            id: string | null;
+            /** @description Load progress; non-null only when `complete` is false. */
+            progress?: components["schemas"]["ProgressInfo"] | null;
             /**
              * Repo Count
-             * @description Repositories in the org before filtering.
+             * @description Repositories in the org before filtering. Null while loading.
              */
-            repo_count: number;
+            repo_count: number | null;
             /**
              * Stale
              * @description True when served past its TTL because GitHub was unavailable or rate limited.
@@ -185,6 +255,19 @@ export interface components {
          * @enum {string}
          */
         SortOrder: "asc" | "desc";
+        /** ValidationError */
+        ValidationError: {
+            /** Context */
+            ctx?: Record<string, never>;
+            /** Input */
+            input?: unknown;
+            /** Location */
+            loc: (string | number)[];
+            /** Message */
+            msg: string;
+            /** Error Type */
+            type: string;
+        };
     };
     responses: never;
     parameters: never;
@@ -194,6 +277,55 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    createDevToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["DevTokenRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevToken"];
+                };
+            };
+            /** @description Cross-site request, or organisation not on the allowlist */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not in dev auth mode */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     listOrgRepos: {
         parameters: {
             query?: {
@@ -228,10 +360,12 @@ export interface operations {
             /** @description A page of repositories. */
             200: {
                 headers: {
-                    /** @description `private, max-age=60`, or `no-cache` when stale. */
+                    /** @description `private, max-age=60`, `no-cache` when stale, or `no-store` on provisional pages. */
                     "Cache-Control"?: string;
-                    /** @description Weak validator for this page. */
+                    /** @description Weak validator for this page (absent on provisional pages). */
                     ETag?: string;
+                    /** @description Seconds to wait before re-requesting; only on provisional pages (`snapshot.complete` false). */
+                    "Retry-After"?: number;
                     /** @description Upstream rate limit ceiling, when known. */
                     "X-GitHub-RateLimit-Limit"?: number;
                     /** @description Upstream requests remaining, when known. */
@@ -260,6 +394,24 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            /** @description Missing or invalid credentials (`WWW-Authenticate: Bearer`) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Cross-site request, or organisation not on the allowlist */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Organisation not found */
             404: {
                 headers: {
@@ -271,6 +423,15 @@ export interface operations {
             };
             /** @description Invalid query parameters */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Per-client request rate or upstream-call budget exceeded (see Retry-After) */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };

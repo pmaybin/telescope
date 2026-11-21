@@ -11,6 +11,11 @@ Prometheus names produced via otel-lgtm (contract shared with the dashboard):
   telescope_github_ratelimit_remaining   (gauge, last observed)
   telescope_github_ratelimit_limit       (gauge, last observed)
   telescope_upstream_fetches_total{outcome="full|revalidated|error"}
+  telescope_client_rejections_total{reason="unauthorized|cross_site|org_not_allowed|
+                                           rate_limited|upstream_budget"}
+  telescope_upstream_spend_total{initiator="user|system"}   (GitHub calls charged)
+  telescope_preview_total{outcome="exact|inexact|skipped|disabled|unavailable|free"}
+                                       (provisional first-page decisions; no per-user labels)
 """
 
 from __future__ import annotations
@@ -25,6 +30,7 @@ from opentelemetry.metrics import CallbackOptions, Counter, Histogram, Observati
 
 CacheResult = Literal["hit", "miss", "stale", "negative_hit"]
 FetchOutcome = Literal["full", "revalidated", "error"]
+PreviewOutcome = Literal["exact", "inexact", "skipped", "disabled", "unavailable", "free"]
 
 
 @dataclass
@@ -33,6 +39,9 @@ class _Instruments:
     github_requests: Counter
     github_duration: Histogram
     upstream_fetches: Counter
+    client_rejections: Counter
+    upstream_spend: Counter
+    preview: Counter
 
 
 _lock = threading.Lock()
@@ -85,6 +94,21 @@ def _get() -> _Instruments:
                 upstream_fetches=meter.create_counter(
                     "telescope_upstream_fetches", unit="{fetch}", description="Org fetches"
                 ),
+                client_rejections=meter.create_counter(
+                    "telescope_client_rejections",
+                    unit="{request}",
+                    description="Requests refused before serving (no per-user labels)",
+                ),
+                upstream_spend=meter.create_counter(
+                    "telescope_upstream_spend",
+                    unit="{request}",
+                    description="Upstream GitHub calls charged, by initiator",
+                ),
+                preview=meter.create_counter(
+                    "telescope_preview",
+                    unit="{decision}",
+                    description="Provisional first-page preview decisions, by outcome",
+                ),
             )
         return _instruments
 
@@ -115,3 +139,18 @@ def github_rate_limit(remaining: int | None, limit: int | None) -> None:
 def upstream_fetch(outcome: FetchOutcome, pages: int) -> None:
     """Record one complete org fetch (all pages) and its outcome."""
     _get().upstream_fetches.add(1, {"outcome": outcome})
+
+
+def client_rejection(reason: str) -> None:
+    """Record one request refused for auth, policy or per-user limit reasons."""
+    _get().client_rejections.add(1, {"reason": reason})
+
+
+def upstream_spend(initiator: Literal["user", "system"], cost: int) -> None:
+    """Record upstream calls charged to users or to the system (background refreshes)."""
+    _get().upstream_spend.add(cost, {"initiator": initiator})
+
+
+def preview(outcome: PreviewOutcome) -> None:
+    """Record one provisional-preview decision (once per cold load and query)."""
+    _get().preview.add(1, {"outcome": outcome})

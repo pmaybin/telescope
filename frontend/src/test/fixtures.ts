@@ -48,6 +48,7 @@ export function makePage(over: Partial<RepoPage> = {}): RepoPage {
       fetched_at: '2026-11-17T10:00:00Z',
       repo_count: items.length,
       stale: false,
+      complete: true,
       cursor_from_older_snapshot: false,
     },
     rate_limit: {

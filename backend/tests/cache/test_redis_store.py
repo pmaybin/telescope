@@ -7,7 +7,7 @@ import pytest
 from fakeredis import FakeAsyncRedis
 
 from telescope.cache import RedisSnapshotStore, SnapshotService
-from telescope.models import Repo, Snapshot
+from telescope.models import LoadProgress, Repo, Snapshot
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -90,7 +90,9 @@ async def test_corrupt_payload_is_a_miss(
 async def test_works_under_snapshot_service(store: RedisSnapshotStore) -> None:
     calls = 0
 
-    async def fetcher(org: str, previous: Snapshot | None) -> Snapshot:
+    async def fetcher(
+        org: str, previous: Snapshot | None, progress: LoadProgress | None = None
+    ) -> Snapshot:
         nonlocal calls
         calls += 1
         return Snapshot(org, (make_repo(1),), T0)

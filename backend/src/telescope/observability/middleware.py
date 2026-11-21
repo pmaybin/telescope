@@ -57,6 +57,7 @@ class RequestIdMiddleware:
             path: str = scope["path"]
             route = getattr(scope.get("route"), "path", None)
             client = scope.get("client")
+            principal = scope.get("telescope.principal")
             logger.log(
                 logging.DEBUG if path == "/healthz" else logging.INFO,
                 "http.request",
@@ -67,6 +68,7 @@ class RequestIdMiddleware:
                     "status_code": status_code,
                     "duration_ms": round((time.perf_counter() - start) * 1000, 2),
                     "client": client[0] if client else None,
+                    "principal": principal.key if principal else None,
                 },
             )
             request_id.reset(token)

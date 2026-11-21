@@ -1,7 +1,10 @@
+import { useEffect, useState } from 'react'
 import {
   CloudOff,
   Gauge,
   Link2Off,
+  LockKeyhole,
+  ShieldX,
   RotateCcw,
   SearchX,
   TriangleAlert,
@@ -24,6 +27,28 @@ function resetInfo(seconds: number | null): string {
     return 'GitHub did not say when the limit resets; try again in a few minutes.'
   const at = new Date(Date.now() + seconds * 1000).toISOString()
   return `The limit resets in about ${seconds} second${seconds === 1 ? '' : 's'} (at ${absoluteTime(at)}).`
+}
+
+/** Counts down from `seconds` and calls `onDone` once at 0. */
+function Countdown({
+  seconds,
+  onDone,
+  children,
+}: {
+  seconds: number
+  onDone: () => void
+  children: (left: number) => string
+}) {
+  const [left, setLeft] = useState(Math.ceil(seconds))
+  useEffect(() => {
+    if (left <= 0) {
+      onDone()
+      return
+    }
+    const t = setTimeout(() => setLeft((n) => n - 1), 1000)
+    return () => clearTimeout(t)
+  }, [left, onDone])
+  return <strong aria-live="polite">{children(left)}</strong>
 }
 
 const RetryButton = ({ onRetry }: { onRetry: () => void }) => (
@@ -71,6 +96,70 @@ export function ProblemView({
           It was issued for different filters or sorting. Start again from the
           first page.
         </p>
+      </StateView>
+    )
+  }
+  if (problem.status === 401) {
+    return (
+      <StateView
+        role="alert"
+        icon={LockKeyhole}
+        tone="warning"
+        title="Not signed in"
+        actions={<RetryButton onRetry={onRetry} />}
+      >
+        <p>Your session is missing or has expired. Sign in and try again.</p>
+      </StateView>
+    )
+  }
+  if (slug === 'org-not-allowed') {
+    return (
+      <StateView
+        role="alert"
+        icon={ShieldX}
+        tone="danger"
+        title="This organisation isn't on the allowlist"
+      >
+        <p>The server only serves a fixed set of organisations. Try another.</p>
+        <OrgChips onPick={onPickOrg} />
+      </StateView>
+    )
+  }
+  if (slug === 'client-rate-limited') {
+    const seconds = problem.retry_after ?? retryAfterHeader ?? 5
+    return (
+      <StateView
+        role="alert"
+        icon={Gauge}
+        tone="warning"
+        title="Slow down"
+        actions={<RetryButton onRetry={onRetry} />}
+      >
+        <p>
+          <Countdown seconds={seconds} onDone={onRetry}>
+            {(n) => `Slow down — try again in ${n}s`}
+          </Countdown>
+        </p>
+        <p>It will retry automatically.</p>
+      </StateView>
+    )
+  }
+  if (slug === 'upstream-budget-exceeded') {
+    const seconds = problem.retry_after ?? retryAfterHeader
+    const mins = seconds === null ? null : Math.max(1, Math.ceil(seconds / 60))
+    return (
+      <StateView
+        role="alert"
+        icon={Gauge}
+        tone="warning"
+        title="GitHub fetch budget used"
+        actions={<RetryButton onRetry={onRetry} />}
+      >
+        <p>
+          You've used your GitHub fetch budget for new orgs; cached orgs still
+          work; retry in {mins === null ? 'a few' : mins} min.
+        </p>
+        <OrgChips onPick={onPickOrg} />
       </StateView>
     )
   }

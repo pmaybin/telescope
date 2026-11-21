@@ -4,11 +4,13 @@ import type { RepoQuery } from './api/client'
 import { AppShell } from './components/AppShell'
 import { FilterBar } from './components/FilterBar'
 import { OrgHeader } from './components/OrgHeader'
+import { LoadingBanner } from './components/LoadingBanner'
 import { Pagination } from './components/Pagination'
 import { ProblemView } from './components/ProblemView'
 import { RepoTable, SkeletonTable } from './components/RepoTable'
 import { StartState } from './components/StartState'
 import { StateView } from './components/StateView'
+import { isComplete } from './api/progressive'
 import { absoluteTime, ORG_PATTERN, PAGE_SIZES } from './format'
 import { useRepos } from './useRepos'
 import { useUrlState } from './useUrlState'
@@ -137,14 +139,19 @@ function App() {
       </>
     )
   } else if (shown) {
-    const empty = shown.items.length === 0
+    const complete = isComplete(shown)
+    const empty = shown.items.length === 0 && complete
+    const skeleton = shown.items.length === 0 && !complete
     content = (
       <>
+        <LoadingBanner data={shown} />
         {shown.snapshot.stale && (
           <p role="status" className="alert-inline" data-tone="warning">
             <TriangleAlert size={14} aria-hidden="true" />
             <span>
-              Showing cached data from {absoluteTime(shown.snapshot.fetched_at)}
+              Showing cached data
+              {shown.snapshot.fetched_at &&
+                ` from ${absoluteTime(shown.snapshot.fetched_at)}`}
               ; GitHub is currently unavailable.
             </span>
           </p>
@@ -155,7 +162,13 @@ function App() {
             <span>Data refreshed while paging; order may have shifted.</span>
           </p>
         )}
-        {empty ? (
+        {skeleton ? (
+          <SkeletonTable
+            rows={Math.min(limit, 10)}
+            sort={sort}
+            order={effectiveOrder}
+          />
+        ) : empty ? (
           <StateView
             role="status"
             icon={SearchX}

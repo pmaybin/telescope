@@ -27,3 +27,5 @@ def test_metrics_facade_without_provider() -> None:
     metrics.github_rate_limit(10, 5000)
     metrics.github_rate_limit(None, None)
     metrics.upstream_fetch("full", 3)
+    for outcome in ("exact", "inexact", "skipped", "disabled", "unavailable", "free"):
+        metrics.preview(outcome)  # type: ignore[arg-type]

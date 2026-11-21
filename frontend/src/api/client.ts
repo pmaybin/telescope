@@ -1,4 +1,5 @@
 import createClient from 'openapi-fetch'
+import { authMiddleware } from './auth'
 import type { components, paths } from './schema'
 
 export type RepoPage = components['schemas']['RepoPage']
@@ -9,6 +10,6 @@ export type RepoQuery = NonNullable<
 >
 
 /** Typed client for our backend only. The frontend never calls GitHub directly. */
-export const api = createClient<paths>({
-  baseUrl: import.meta.env.VITE_API_BASE_URL ?? '',
-})
+const baseUrl = import.meta.env.VITE_API_BASE_URL ?? ''
+export const api = createClient<paths>({ baseUrl })
+api.use(authMiddleware(baseUrl))

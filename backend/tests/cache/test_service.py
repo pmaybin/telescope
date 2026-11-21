@@ -6,9 +6,10 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from telescope.cache import InMemorySnapshotStore, SnapshotService
-from telescope.errors import OrgNotFound, UpstreamUnavailable
-from telescope.models import Snapshot
+from telescope.auth.principal import SYSTEM, current_principal
+from telescope.cache import CachedSnapshot, InMemorySnapshotStore, Loading, SnapshotService
+from telescope.errors import OrgNotFound, UpstreamBudgetExceeded, UpstreamUnavailable
+from telescope.models import LoadProgress, Snapshot
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -30,9 +31,13 @@ class FakeFetcher:
         self.calls: list[tuple[str, Snapshot | None]] = []
         self.gate: asyncio.Event | None = None
         self.error: Exception | None = None
+        self.progress: LoadProgress | None = None
 
-    async def __call__(self, org: str, previous: Snapshot | None) -> Snapshot:
+    async def __call__(
+        self, org: str, previous: Snapshot | None, progress: LoadProgress | None = None
+    ) -> Snapshot:
         self.calls.append((org, previous))
+        self.progress = progress
         if self.gate is not None:
             await self.gate.wait()
         if self.error is not None:
@@ -182,6 +187,17 @@ async def test_expired_upstream_error_serves_stale(
     assert any(r.levelno == logging.WARNING for r in caplog.records)
 
 
+async def test_expired_user_budget_exceeded_serves_stale(
+    service: SnapshotService, fetcher: FakeFetcher, clock: Clock
+) -> None:
+    # A user out of upstream budget still gets the (stale) snapshot rather than a 429.
+    first = await service.get("acme")
+    clock.advance(500)
+    fetcher.error = UpstreamBudgetExceeded("over budget", retry_after=60)
+    result = await service.get("acme")
+    assert result.stale and result.snapshot is first.snapshot
+
+
 async def test_beyond_max_stale_raises(
     service: SnapshotService, fetcher: FakeFetcher, clock: Clock
 ) -> None:
@@ -242,3 +258,118 @@ async def test_lru_eviction(clock: Clock) -> None:
     assert await store.get("a") is snap and await store.get("c") is snap
     await store.delete("a")
     assert await store.get("a") is None
+
+
+# ---------------------------------------------------------------- progressive cold load
+
+
+async def test_progress_is_reported_by_the_fetcher_and_exposed_on_the_flight(
+    store: Spy, clock: Clock
+) -> None:
+    gate = asyncio.Event()
+
+    async def fetcher(
+        org: str, previous: Snapshot | None, progress: LoadProgress | None = None
+    ) -> Snapshot:
+        assert progress is not None
+        progress.first_page_landed([], 3)
+        await gate.wait()
+        progress.page_landed()
+        return Snapshot(org, (), clock.t)
+
+    svc = SnapshotService(store, fetcher, cold_wait_s=0, now=clock)
+    loading = await svc.get_first_page("acme")
+    assert isinstance(loading, Loading)
+    await asyncio.sleep(0)
+    assert loading.flight.progress.pages_done == 1 and loading.flight.progress.pages_total == 3
+    gate.set()
+    await asyncio.sleep(0.01)
+    assert loading.flight.progress.pages_done == 2
+    done = await svc.get_first_page("acme")
+    assert isinstance(done, CachedSnapshot)
+    await svc.aclose()
+
+
+async def test_cold_wait_lands_in_time(store: Spy, fetcher: FakeFetcher, clock: Clock) -> None:
+    svc = SnapshotService(store, fetcher, cold_wait_s=5, now=clock)  # fetcher is instant
+    result = await svc.get_first_page("acme")
+    assert isinstance(result, CachedSnapshot) and not result.stale
+    await svc.aclose()
+
+
+async def test_cold_wait_missed_returns_loading_and_the_walk_continues(
+    store: Spy, fetcher: FakeFetcher, clock: Clock
+) -> None:
+    fetcher.gate = asyncio.Event()
+    svc = SnapshotService(store, fetcher, cold_wait_s=0, now=clock)
+    first = await svc.get_first_page("acme", starter="q1")
+    second = await svc.get_first_page("acme", starter="q2")
+    assert isinstance(first, Loading) and isinstance(second, Loading)
+    assert first.flight is second.flight  # single flight; one walk
+    assert first.flight.starter_hash == "q1"
+    assert len(fetcher.calls) == 1
+    fetcher.gate.set()
+    await asyncio.sleep(0.01)
+    assert store.sets == 1  # the walk finished and stored despite nobody waiting
+    assert isinstance(await svc.get_first_page("acme"), CachedSnapshot)
+    await svc.aclose()
+
+
+async def test_cold_wait_does_not_swallow_walk_errors(
+    store: Spy, fetcher: FakeFetcher, clock: Clock
+) -> None:
+    fetcher.error = UpstreamUnavailable("down")
+    svc = SnapshotService(store, fetcher, cold_wait_s=5, now=clock)
+    with pytest.raises(UpstreamUnavailable):
+        await svc.get_first_page("acme")
+    await svc.aclose()
+
+
+async def test_stale_path_still_blocks_with_cold_wait_enabled(
+    store: Spy, fetcher: FakeFetcher, clock: Clock
+) -> None:
+    svc = SnapshotService(
+        store, fetcher, ttl_s=100, stale_while_revalidate_s=20, cold_wait_s=0, now=clock
+    )
+    await svc.get("acme")
+    clock.advance(500)  # beyond ttl + swr
+    fetcher.gate = asyncio.Event()
+    task = asyncio.ensure_future(svc.get_first_page("acme"))
+    await asyncio.sleep(0.01)
+    assert not task.done()  # blocks, exactly like get()
+    fetcher.gate.set()
+    assert isinstance(await task, CachedSnapshot)
+    await svc.aclose()
+
+
+async def test_prewarm_warms_in_the_background_as_system(
+    store: Spy, fetcher: FakeFetcher, clock: Clock
+) -> None:
+    seen = []
+
+    async def spying(
+        org: str, previous: Snapshot | None, progress: LoadProgress | None = None
+    ) -> Snapshot:
+        seen.append(current_principal.get())
+        return await fetcher(org, previous, progress)
+
+    svc = SnapshotService(store, spying, now=clock)
+    svc.prewarm(["acme", "Globex"])
+    await asyncio.gather(*svc._background)
+    assert store.sets == 2
+    assert seen == [SYSTEM, SYSTEM]
+    assert isinstance(await svc.get_first_page("acme"), CachedSnapshot)
+    assert len(fetcher.calls) == 2
+    await svc.aclose()
+
+
+async def test_prewarm_failure_is_only_logged(
+    store: Spy, fetcher: FakeFetcher, clock: Clock, caplog: pytest.LogCaptureFixture
+) -> None:
+    fetcher.error = UpstreamUnavailable("down")
+    svc = SnapshotService(store, fetcher, now=clock)
+    with caplog.at_level(logging.WARNING):
+        svc.prewarm(["acme"])
+        await asyncio.gather(*svc._background)
+    assert "prewarm failed" in caplog.text and store.sets == 0
+    await svc.aclose()

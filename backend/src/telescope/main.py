@@ -56,6 +56,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        services.snapshots.prewarm(settings.prewarm_orgs)
         try:
             yield
         finally:

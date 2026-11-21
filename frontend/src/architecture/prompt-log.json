@@ -360,6 +360,126 @@
    "bead_id": "",
    "summary": "Commit, push, make public, then submit",
    "prompt": "once that is complete we can commit, puch and make public, we will then submit it if you are satisfied all tests are passing"
+  },
+  {
+   "n": 31,
+   "timestamp_utc": "2026-11-21T09:18:04Z",
+   "actor": "human",
+   "from": "human",
+   "to": "architect",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "bead_id": "",
+   "summary": "Round two (branch): investigate slow cold fetch; architect fast first page + spinner for the rest",
+   "prompt": "round two, to be be worked on a second branch for now is to investigate \"Requests are cheap once a snapshot exists: a warm request takes about 30ms and costs no GitHub quota. A cold fetch is the expensive path (google: 2,946 repos in 30 pages, 13s tokenless at concurrency 4 and 7.3s with a token at concurrency 8; microsoft: 8,474 repos in 85 pages, 33s at concurrency 4), so most of the design protects that path: single-flight, a budget guard, ETag revalidation, stale-while-revalidate and serve-stale-on-error.\" The initial load can be very slow, While its loading  we should architect a way to load the first page with a spinner for the rest?\n"
+  },
+  {
+   "n": 32,
+   "timestamp_utc": "2026-11-21T09:36:29Z",
+   "actor": "human",
+   "from": "human",
+   "to": "architect",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "bead_id": "tel-1xy",
+   "summary": "Quota question: cold + filtered first request = preview + snapshot seed?",
+   "prompt": "so before we continue, our aim is to minimise token usage, if a snap shot is there, this will not cost us any additional tokens, if we filter and a snap shot is there, we are running of the snap shot, so that won't matter, if there is no snapshot and we filter on the first try, then the filter will be sent but also the backend call to seed the snap shot?"
+  },
+  {
+   "n": 33,
+   "timestamp_utc": "2026-11-21T09:36:29Z",
+   "actor": "human",
+   "from": "human",
+   "to": "architect",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "bead_id": "tel-1xy",
+   "summary": "Discuss per-user rate limiting, DoS protection of GitHub quota, JWT vs CSRF for dev",
+   "prompt": "lets discuss per user rate limiting too, we should ensure that dos and other attacks don't use up all the credits, - even though this is an internal system and its assumed that its behind some system like tailscale with rbac we should also think about security either for dev we should set up minted jwt or csrf?"
+  },
+  {
+   "n": 34,
+   "timestamp_utc": "2026-11-21T09:36:29Z",
+   "actor": "human",
+   "from": "human",
+   "to": "architect",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "bead_id": "tel-1xy",
+   "summary": "Approve JWTs (dev-minted, gateway in prod); org allowlist off by default; record timings, prompts, decisions",
+   "prompt": "yes for the jwts and off by default, remember to record the timings and prompts and decisions"
+  },
+  {
+   "n": 35,
+   "timestamp_utc": "2026-11-21T09:38:14Z",
+   "actor": "architect",
+   "from": "architect",
+   "to": "subagent",
+   "model": "claude-sonnet-5-5",
+   "effort": "medium",
+   "bead_id": "tel-7i3",
+   "summary": "Implement ADR-0013 (backend)",
+   "prompt": "You are implementing bead tel-7i3 in /home/paul/.t3/projects/telescope (branch feat/progressive-first-page; do NOT commit, push or switch branches). Read docs/adr/0013-auth-and-quota-protection.md first — it is the spec; follow it exactly. Also skim docs/adr/0006 (problem+json), 0011 (test rules: respx, injected now/sleep, no network, xdist-safe, no module-level mutable state).\n\nBeads: run bd as `env -u BEADS_DIR bd ...` (global env points elsewhere). `env -u BEADS_DIR bd update tel-7i3 --claim` at start. Do not close it; the architect will.\n\nCode map: backend/src/telescope/{settings.py, main.py (create_app factory + problem+json OpenAPI post-process), api/{deps.py,routes.py,problems.py}, errors.py, cache/service.py (SnapshotService: single-flight via asyncio tasks, SWR background refresh), github/client.py (GitHubClient._get_page / _check_budget / rate-limit state), cache/redis_store.py, observability/{metrics.py,middleware.py,logging.py}}. Tests in backend/tests.\n\nImplement:\n1. Settings: auth_mode Literal[\"dev\",\"jwt\",\"tailscale\",\"none\"]=\"dev\"; auth_dev_secret SecretStr|None; auth_jwks_url, auth_jwt_issuer, auth_jwt_audience; auth_trusted_proxies list[str] (IPs/CIDRs); user_rate_per_min=120, user_rate_burst=30; user_upstream_budget=100, user_upstream_window_s=600; upstream_reserve_fraction=0.2; max_concurrent_walks=2; org_allowlist list[str]=[] (comma-separated env accepted, like cors_origins handling). Update .env.example with commented entries.\n2. Auth package telescope/auth/: Principal(sub, source: \"jwt\"|\"dev\"|\"tailscale\"|\"ip\"|\"system\"). Use PyJWT (add `pyjwt[crypto]` via uv in backend/). dev: HS256 iss=telescope-dev aud=telescope exp 1h; random secret per process if unset. jwt: PyJWKClient(auth_jwks_url), asymmetric algs only (RS256/ES256 etc, never HS*/none), verify iss/aud/exp. tailscale: header Tailscale-User-Login trusted only when request.client.host in trusted proxies, else 401. none: client IP (X-Forwarded-For first hop honoured only when peer is a trusted proxy). POST /api/dev/token (body optional {\"sub\": str, 1-64 chars}) -> {\"access_token\",\"token_type\":\"Bearer\",\"expires_in\"}; route registered/returns 404 unless auth_mode=dev. 401 problem slug `unauthorized` + `WWW-Authenticate: Bearer`. /healthz and /docs,/openapi.json public.\n3. Cross-site guard: Sec-Fetch-Site: cross-site on /api/* -> 403 `cross-site-request`.\n4. Allowlist: if org_allowlist non-empty and org (case-insensitive) not in it -> 403 `org-not-allowed`, before cache/upstream work.\n5. Limiter: RateLimiter protocol `take(key, cost, rate_per_s, burst) -> Decision(allowed, retry_after_s)`, token bucket; InMemory impl (injected clock) and Redis impl (Lua script, atomic) selected by cache_backend like the snapshot store. Request bucket per principal -> 429 `client-rate-limited` + Retry-After + retry_after extension.\n6. Upstream spend: a contextvar holding the current Principal (set by the API dependency). An UpstreamGovernor consulted by GitHubClient before every upstream request (cost 1) and once after page 1 for the remaining total-1 pages atomically (alongside existing _check_budget). Per-principal spend bucket (budget per window) -> 429 `upstream-budget-exceeded`. Global reserve: for non-system principals refuse if known remaining - cost < reserve_fraction*limit -> existing UpstreamRateLimited (503). Principal \"system\" (SWR background refreshes in SnapshotService._refresh_in_background must run with the system principal in context — set contextvar inside the task) is never charged and may use the reserve. Joiners of an in-flight walk are not charged (they don't create the task — make sure contextvar copying gives the walk the initiator's principal). Nothing charged on cache hits.\n7. Walk concurrency: global asyncio.Semaphore(max_concurrent_walks) around the fetcher call in SnapshotService.\n8. Errors -> problem+json via the existing problems module; add 401/403/429 to the OpenAPI responses so the generated client knows them. Metrics: telescope.client_rejections{reason}, telescope.upstream_spend{initiator=user|system} (no per-user labels). Log `principal` in the access log/middleware and on rejections.\n9. Existing tests: make the test app fixture use auth_mode=\"none\" (and generous limits) so they keep passing; add focused suites: tests/auth (dev mint+verify, expired, wrong aud, HS token rejected in jwt mode using a locally generated RSA key + respx-mocked JWKS, tailscale trusted/untrusted, cross-site 403, allowlist), tests/ratelimit (bucket math with injected clock, redis impl via fakeredis ONLY if already a dev dep — otherwise test Lua path minimally or skip with clear reason), governor (random-org flood exhausts user budget then 429 while another user still served; joiner not charged; SWR refresh charged to system; reserve refusal; pre-charge of total-1 refuses before fan-out).\n10. Regenerate contract: `make openapi` and `make gen-client` (updates openapi.json and frontend/src/api/schema.d.ts — you own these two files). Do not edit other frontend files (another agent is working there).\n11. Gate: `make lint` and `make test` must pass (backend + frontend). Update docs/design/api-contract.md (auth + new error rows) and README (Auth/quota section: modes, dev token is not a security boundary, production must use jwt/tailscale, env vars table).\n\nReport back: files changed, test counts, any deviation from ADR-0013 and why, anything left undone.\n"
+  },
+  {
+   "n": 36,
+   "timestamp_utc": "2026-11-21T09:38:14Z",
+   "actor": "architect",
+   "from": "architect",
+   "to": "subagent",
+   "model": "claude-sonnet-5-5",
+   "effort": "medium",
+   "bead_id": "tel-rp6",
+   "summary": "Implement ADR-0013 (frontend)",
+   "prompt": "You are implementing bead tel-rp6 in /home/paul/.t3/projects/telescope (branch feat/progressive-first-page; do NOT commit, push or switch branches). Read docs/adr/0013-auth-and-quota-protection.md (the spec). Beads: `env -u BEADS_DIR bd update tel-rp6 --claim` (always run bd with BEADS_DIR unset); don't close it.\n\nAnother agent is concurrently implementing the backend side and owns: everything under backend/, openapi.json, and frontend/src/api/schema.d.ts (generated — do NOT edit or regenerate it). Work only in frontend/ (excluding schema.d.ts) and frontend/nginx.conf, infra/ only if needed for headers.\n\nBackend contract you can rely on (will exist when the backend lands):\n- POST /api/dev/token, optional JSON body {\"sub\": string} -> 200 {\"access_token\": string, \"token_type\": \"Bearer\", \"expires_in\": number}; 404 when the server is not in dev auth mode.\n- All /api calls may return problem+json: 401 type .../problems/unauthorized (with WWW-Authenticate: Bearer); 403 .../cross-site-request or .../org-not-allowed; 429 .../client-rate-limited or .../upstream-budget-exceeded with Retry-After header and `retry_after` (seconds) extension. Problem `type` is `https://telescope.local/problems/<slug>`.\n\nImplement:\n1. Token handling in the API client layer (find it under frontend/src/api and useRepos.ts; it uses openapi-fetch — add an openapi-fetch middleware): keep the token in memory only (never localStorage). Before the first request, mint via POST /api/dev/token (use plain fetch for this call since it is not yet in the generated schema); if 404, remember \"no dev auth\" and send no Authorization header (production gateway injects it). On 401: re-mint once and retry the request once; dedupe concurrent mints (single in-flight promise). Refresh proactively shortly before expires_in.\n2. UX: render friendly states for 429 client-rate-limited (\"Slow down — try again in Ns\" with a countdown and auto-retry when it hits 0), 429 upstream-budget-exceeded (\"You've used your GitHub fetch budget for new orgs; cached orgs still work; retry in N min\"), 403 org-not-allowed (\"This organisation isn't on the allowlist\"), 401 after retry (\"Not signed in\"). Reuse the existing error state components/styles and design tokens; keep light/dark working.\n3. nginx.conf security headers (always): Content-Security-Policy \"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://avatars.githubusercontent.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'\" (adjust if the app genuinely needs more — check Mermaid on /architecture and fonts), X-Content-Type-Options nosniff, Referrer-Policy no-referrer. The no-flash inline theme script in index.html must move to a static file (e.g. public/theme-init.js loaded synchronously in <head>) so script-src 'self' holds; keep behaviour identical (localStorage key telescope-theme).\n4. Tests (Vitest + MSW, see existing src/test setup): token minted once and sent as Bearer; 404 dev-token -> no header; 401 -> re-mint + single retry; concurrent requests share one mint; each new error state renders. Since the generated schema won't include the new endpoint yet, type the dev-token response locally.\n5. Gate: in frontend run pnpm lint, pnpm typecheck (or the scripts the Makefile uses — check Makefile `lint`/`test` targets) and pnpm test; all must pass. Don't run `make gen-client`.\n\nReport back: files changed, test counts, any CSP adjustments and why.\n"
+  },
+  {
+   "n": 37,
+   "timestamp_utc": "2026-11-21T09:48:01Z",
+   "actor": "architect",
+   "from": "architect",
+   "to": "subagent",
+   "model": "claude-sonnet-5-5",
+   "effort": "medium",
+   "bead_id": "tel-1xy",
+   "summary": "Implement ADR-0012 (backend)",
+   "prompt": "You are implementing the backend of bead tel-1xy in /home/paul/.t3/projects/telescope (branch feat/progressive-first-page; do NOT commit/push/switch branches). Run bd as `env -u BEADS_DIR bd ...`; don't close the bead. Never print .env (real token).\n\nSpec: docs/adr/0012-progressive-cold-load.md (incl. the \"Preview cap\" bullet), evidence docs/research/cold-load-first-page.md and scripts/spikes/cold_first_page_probe.py (shows the exact upstream calls/params that reproduce our first page). The shared contract is in /tmp/r2/contract.md — implement it exactly (a frontend agent is coding against it in parallel). ADR-0013 (auth/quota) was just implemented: previews MUST go through the UpstreamGovernor (charged to the initiating principal, reserve rules) — read backend/src/telescope/ratelimit and how github/client.py charges.\n\nImplement:\n1. Progress: SnapshotService tracks per-flight progress (pages_done, pages_total, and page-1 repos for reuse). Pass a progress reporter into the fetcher (extend the Fetcher signature with an optional progress arg, update FakeFetchers in tests) — GitHubClient reports pages_total after page 1 and increments pages_done as pages land.\n2. Cold wait: new setting cold_wait_ms=1500. On a cold miss (no cached snapshot at all) for a FIRST-PAGE query (no cursor, offset None or 0), wait for the flight up to cold_wait_ms (shielded; the walk continues regardless). If it lands, respond as today. Otherwise build a provisional response. Cursor/offset>0 queries and stale/SWR paths behave exactly as today (block). Use the injected clock/sleep patterns so tests don't really wait (e.g. asyncio.wait_for with an injectable timeout; tests set cold_wait_ms small or 0).\n3. Preview (setting preview_mode: Literal[\"off\",\"first\",\"per-query\"]=\"first\"):\n   - \"first\": at most ONE upstream preview per cold load per org — only for the query that started the load; later distinct queries during the same load get items=[] with provisional_reason \"preview-skipped\". \"per-query\": one preview per distinct normalised query (query_hash) per load. \"off\": never (\"preview-disabled\"). Previews are cached on the flight for its lifetime, so polling repeats cost 0 upstream calls.\n   - Free path: sort=name asc uses the walk's own page 1 (no extra call) — for every query regardless of mode, once page 1 has arrived.\n   - sort=name desc / updated / pushed: GET /orgs/{org}/repos?type=public&sort=full_name|updated|pushed&direction=<order>&per_page=100.\n   - sort=stars: GET /search/repositories with q=\"org:{org} fork:true|fork:only|(sources: omit fork qualifier → search default excludes forks)\" plus archived:true|false, stars:>=N, language:\"X\"; sort=stars, order=<order>, per_page=100. language=none → no preview (\"preview-unavailable\"). Use Search total_count as page.total.\n   - Map items with github/mapping.parse_repo, then run the normal local query engine on them, cut to limit. Exactness: exact if (matches after local filters >= limit) or (upstream returned < 100 items, i.e. complete result); additionally for asc updated/pushed, inexact if any upstream item has a null sort key. Inexact → items=[] with \"preview-inexact\".\n   - Any preview failure (HTTP error, Search rate limit, governor refusal, reserve) → items=[] with \"preview-unavailable\"; it never fails the request and never fails the walk.\n   - IMPORTANT: Search responses carry x-ratelimit-resource: search — they must not overwrite the core RateLimitState used by the budget guard/reserve (only observe headers where resource is core or absent). Add a test.\n4. Response per /tmp/r2/contract.md (make the model fields nullable/new), headers no-store + Retry-After: 1, no ETag. If the walk itself fails while a client polls, the next poll gets the walk's error as today.\n5. PREWARM_ORGS (comma list, default empty): on startup, warm each org in the background as the system principal (not charged to users); failures only logged.\n6. Metrics/logs: telescope_preview{outcome=exact|inexact|skipped|disabled|unavailable|free} (no per-user labels); log preview outcome.\n7. Tests: service progress + cold wait (lands in time vs not), preview mode matrix (first/per-query/off; second query skipped; polling doesn't refetch), name-asc free path makes 0 extra calls, search query translation (respx asserts q string), exactness rules incl. null asc case, preview failure → unavailable while walk still succeeds, search rate-limit headers don't touch core state, governor charging of previews, API-level provisional response shape + headers, prewarm.\n8. Regenerate contract: `make openapi` and `make gen-client` (you own openapi.json and frontend/src/api/schema.d.ts; do not edit other frontend files). Update docs/design/api-contract.md and README (progressive load section + new env vars) and .env.example; add passthroughs in infra/docker-compose.yml for new env vars.\n9. Gate: `make lint` and `make test`. Frontend tests may fail only because of the other agent's in-progress work; say so if so.\nReport: files changed, test counts, deviations and why.\n\n## Shared contract additions (ADR-0012) — both agents code against exactly this\nResponse 200 of GET /api/orgs/{org}/repos gains, all additive:\n- snapshot.complete: bool (default true). false = cold load still running; this is a provisional response.\n- snapshot.progress: {pages_done: int, pages_total: int | null} | null — non-null only when complete=false (pages_total null until page 1 has arrived).\n- snapshot.id, snapshot.fetched_at, snapshot.repo_count become nullable — null only when complete=false.\n- page.total becomes nullable (null while loading, unless the preview came from Search whose total_count is used).\n- page.provisional_reason: \"preview-disabled\" | \"preview-skipped\" | \"preview-inexact\" | \"preview-unavailable\" | null. Non-null only when complete=false AND items is empty (no trustworthy first page). When complete=false and items non-empty, items are an exact provisional first page.\n- While complete=false: has_next=false, has_prev=false, next_cursor=null, prev_cursor=null; headers Cache-Control: no-store, Retry-After: 1, no ETag."
+  },
+  {
+   "n": 38,
+   "timestamp_utc": "2026-11-21T09:48:01Z",
+   "actor": "architect",
+   "from": "architect",
+   "to": "subagent",
+   "model": "claude-sonnet-5-5",
+   "effort": "medium",
+   "bead_id": "tel-1xy",
+   "summary": "Implement ADR-0012 (frontend)",
+   "prompt": "You are implementing the frontend of bead tel-1xy in /home/paul/.t3/projects/telescope (branch feat/progressive-first-page; do NOT commit/push/switch branches). Run bd as `env -u BEADS_DIR bd ...`; don't close the bead. Never print .env.\n\nSpec: docs/adr/0012-progressive-cold-load.md (\"Frontend\" section). The shared response contract is in /tmp/r2/contract.md — code against exactly that. A backend agent works in parallel and owns backend/, openapi.json and frontend/src/api/schema.d.ts (it will regenerate the schema; do NOT edit/regenerate it). Until then, extend the response type locally in one small module (e.g. src/api/progressive.ts) with a TODO noting it can collapse into the generated types after regeneration — avoid @ts-expect-error (it breaks once the schema lands).\n\nImplement (reuse existing components, design tokens, light/dark):\n1. useRepos.ts (React Query): while snapshot.complete === false, refetch every 1000 ms (honour Retry-After header if available, min 500 ms); stop when complete. Keep previous data while switching to the complete response so rows swap in place without flashing a spinner.\n2. Loading banner above the table while complete === false: \"Loading all repositories… {pages_done}/{pages_total} pages\" (or \"Loading repositories…\" when pages_total null), a determinate progress bar (indeterminate style when pages_total null), and when page.total is known \"~{total} repositories\". Accessible: role=\"status\", aria-live=\"polite\", progressbar with aria-valuenow/max. Fade out on completion.\n3. Provisional items: render rows immediately; mark subtly (e.g. a small \"Provisional\" chip in the banner). Empty items with provisional_reason: render skeleton rows (same row height as real rows) instead of the empty state — never show \"No repositories match\" while loading. Pagination controls disabled with title/tooltip \"Available once loading finishes\"; filters and sort stay live. Snapshot meta (fetched_at, repo_count, id) are null while loading — make every consumer null-safe (rate-limit pill, footer, etc.). total null → hide counts gracefully.\n4. Tests (Vitest + MSW): sequence provisional(with items) → complete: banner + progress shown, pagination disabled, then banner gone, rows present, polling stopped (handler call count stable); provisional with empty items + reason → skeleton rows, no empty state; pages_total null → indeterminate; null snapshot fields don't crash.\n5. Gate: pnpm lint, pnpm typecheck, pnpm test in frontend (check Makefile lint/test targets). Don't run make gen-client.\nReport: files changed, test counts, anything that will need reconciling once the generated schema lands.\n\n## Shared contract additions (ADR-0012) — both agents code against exactly this\nResponse 200 of GET /api/orgs/{org}/repos gains, all additive:\n- snapshot.complete: bool (default true). false = cold load still running; this is a provisional response.\n- snapshot.progress: {pages_done: int, pages_total: int | null} | null — non-null only when complete=false (pages_total null until page 1 has arrived).\n- snapshot.id, snapshot.fetched_at, snapshot.repo_count become nullable — null only when complete=false.\n- page.total becomes nullable (null while loading, unless the preview came from Search whose total_count is used).\n- page.provisional_reason: \"preview-disabled\" | \"preview-skipped\" | \"preview-inexact\" | \"preview-unavailable\" | null. Non-null only when complete=false AND items is empty (no trustworthy first page). When complete=false and items non-empty, items are an exact provisional first page.\n- While complete=false: has_next=false, has_prev=false, next_cursor=null, prev_cursor=null; headers Cache-Control: no-store, Retry-After: 1, no ETag."
+  },
+  {
+   "n": 39,
+   "timestamp_utc": "2026-11-21T10:20:41Z",
+   "actor": "human",
+   "from": "human",
+   "to": "architect",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "bead_id": "",
+   "summary": "Did testing use all API credits? Then: microsoft search wouldn't load anything",
+   "prompt": "did you use all my public api credits testing? | then something is breaking as i went to search microsoft and it wouldn't load anything"
+  },
+  {
+   "n": 40,
+   "timestamp_utc": "2026-11-21T10:24:51Z",
+   "actor": "human",
+   "from": "human",
+   "to": "architect",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "bead_id": "",
+   "summary": "Make a new branch, add the changes and push the PR",
+   "prompt": "Make a new branch, add the changes and push the pr"
   }
  ]
 }
