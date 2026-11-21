@@ -162,12 +162,25 @@ export function DiagramCard({ diagram }: { diagram: DiagramEntry }) {
           </div>
         )}
         {render.status === 'ok' && (
-          <div
-            className="diagram-svg"
-            role="img"
-            aria-label={diagram.title}
-            dangerouslySetInnerHTML={{ __html: render.svg }}
-          />
+          // Scaled to fit the card; click (or Enter) opens the zoomable viewer.
+          <button
+            type="button"
+            className="diagram-fit"
+            aria-label={`${diagram.title}: open full screen to zoom`}
+            title="Click to open full screen and zoom"
+            onClick={() => setFull(true)}
+          >
+            <span
+              className="diagram-svg"
+              role="img"
+              aria-label={diagram.title}
+              dangerouslySetInnerHTML={{ __html: render.svg }}
+            />
+            <span className="diagram-fit-hint" aria-hidden="true">
+              <Maximize2 size={12} />
+              Expand to zoom
+            </span>
+          </button>
         )}
       </div>
 
