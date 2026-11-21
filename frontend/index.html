@@ -10,14 +10,7 @@
       content="Browse, filter and sort the repositories of any GitHub organisation."
     />
     <meta name="color-scheme" content="light dark" />
-    <script>
-      // Set the theme before React mounts to avoid a flash of the wrong one.
-      try {
-        var t = localStorage.getItem('telescope-theme')
-        if (t === 'light' || t === 'dark')
-          document.documentElement.setAttribute('data-theme', t)
-      } catch (e) {}
-    </script>
+    <script src="/theme-init.js"></script>
   </head>
   <body>
     <div id="root"></div>

@@ -9,6 +9,7 @@ sequenceDiagram
     participant St as SnapshotStore
     participant Q as run_query
 
+    Note over B,Q: the walk itself, the route waits at most COLD_WAIT_MS, see the progressive diagram for a slower walk
     B->>N: GET /api/orgs/google/repos?sort=stars
     N->>R: proxy with X-Request-ID
     R->>S: get("google")
@@ -18,11 +19,12 @@ sequenceDiagram
     S->>G: fetch_org_repos("google", None)
     G->>H: GET /orgs/google/repos?type=public&per_page=100&page=1
     H-->>G: 200, Link rel=last page=30, x-ratelimit-remaining
-    Note over G: total pages N = 30 from rel=last
-    alt remaining is less than N-1
-        G-->>S: UpstreamRateLimited, pages_needed=N
+    Note over G: total pages N = 30 from rel=last, page 1 already charged to the initiator
+    G->>G: UpstreamGovernor.charge(N-1): reserve check, then per-user budget
+    alt remaining is less than N-1, or the reserve or budget refuses
+        G-->>S: UpstreamRateLimited or UpstreamBudgetExceeded, pages_needed=N
         S-->>R: raise, no snapshot stored
-        R-->>B: 503 problem+json with Retry-After
+        R-->>B: 503 (reserve, GitHub limit) or 429 (user budget), problem+json with Retry-After
     else enough quota
         par pages 2..N, at most 8 in flight
             G->>H: GET page 2

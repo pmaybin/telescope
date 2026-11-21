@@ -13,7 +13,16 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from telescope.errors import OrgNotFound, TelescopeError, UpstreamError, UpstreamRateLimited
+from telescope.errors import (
+    ClientRejection,
+    OrgNotFound,
+    TelescopeError,
+    Unauthorized,
+    UpstreamBudgetExceeded,
+    UpstreamError,
+    UpstreamRateLimited,
+)
+from telescope.observability import metrics
 from telescope.observability.context import request_id
 
 logger = logging.getLogger(__name__)
@@ -59,6 +68,26 @@ async def telescope_error_handler(request: Request, exc: Exception) -> Response:
             extensions["rate_limit"] = exc.rate_limit.to_info().model_dump(mode="json")
         if exc.pages_needed is not None:
             extensions["pages_needed"] = exc.pages_needed
+    if isinstance(exc, Unauthorized):
+        headers = {"WWW-Authenticate": "Bearer"}
+    if isinstance(exc, ClientRejection):
+        metrics.client_rejection(exc.reason)
+        if exc.retry_after is not None:
+            headers = {"Retry-After": str(exc.retry_after)}
+            extensions["retry_after"] = exc.retry_after
+        if isinstance(exc, UpstreamBudgetExceeded) and exc.pages_needed is not None:
+            extensions["pages_needed"] = exc.pages_needed
+        principal = request.scope.get("telescope.principal")
+        logger.warning(
+            "request rejected",
+            extra={
+                "reason": exc.reason,
+                "slug": exc.slug,
+                "status": exc.status,
+                "principal": principal.key if principal else None,
+                "org": request.path_params.get("org"),
+            },
+        )
     if isinstance(exc, UpstreamError | OrgNotFound):
         logger.warning(
             "upstream request failed",

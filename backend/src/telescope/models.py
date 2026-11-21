@@ -11,7 +11,7 @@ import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -151,9 +151,19 @@ class Repo(BaseModel):
 # --------------------------------------------------------------------------- response
 
 
+ProvisionalReason = Literal[
+    "preview-disabled", "preview-skipped", "preview-inexact", "preview-unavailable"
+]
+
+
 class PageInfo(BaseModel):
     limit: int
-    total: int = Field(description="Number of repositories matching the filters.")
+    total: int | None = Field(
+        description=(
+            "Number of repositories matching the filters. Null while the snapshot is still "
+            "loading (`snapshot.complete` false), unless the provisional page came from Search."
+        )
+    )
     has_next: bool
     has_prev: bool
     next_cursor: str | None
@@ -161,12 +171,42 @@ class PageInfo(BaseModel):
     offset: int | None = Field(
         default=None, description="Offset of this page in offset mode; null in cursor mode."
     )
+    provisional_reason: ProvisionalReason | None = Field(
+        default=None,
+        description=(
+            "Why a provisional response (`snapshot.complete` false) has no items: there is "
+            "no trustworthy first page yet. Null when complete, or when the provisional "
+            "items are an exact first page."
+        ),
+    )
+
+
+class ProgressInfo(BaseModel):
+    pages_done: int = Field(description="Upstream pages fetched so far.")
+    pages_total: int | None = Field(description="Upstream pages needed; null until page 1 lands.")
 
 
 class SnapshotInfo(BaseModel):
-    id: str = Field(description="Content hash of the upstream dataset this page was computed from.")
-    fetched_at: datetime = Field(description="When the dataset was last fetched or revalidated.")
-    repo_count: int = Field(description="Repositories in the org before filtering.")
+    id: str | None = Field(
+        description="Content hash of the upstream dataset this page was computed from. "
+        "Null while the snapshot is still loading."
+    )
+    fetched_at: datetime | None = Field(
+        description="When the dataset was last fetched or revalidated. Null while loading."
+    )
+    repo_count: int | None = Field(
+        description="Repositories in the org before filtering. Null while loading."
+    )
+    complete: bool = Field(
+        default=True,
+        description=(
+            "False while the cold load is still running: the response is provisional, "
+            "paging is disabled and the client should re-request after `Retry-After`."
+        ),
+    )
+    progress: ProgressInfo | None = Field(
+        default=None, description="Load progress; non-null only when `complete` is false."
+    )
     stale: bool = Field(
         description="True when served past its TTL because GitHub was unavailable or rate limited."
     )
@@ -224,6 +264,24 @@ class RateLimitState:
             remaining=self.remaining,
             reset_at=self.reset_at,
         )
+
+
+@dataclass(slots=True)
+class LoadProgress:
+    """Mutable progress of one in-flight org walk; the fetcher reports into it."""
+
+    pages_done: int = 0
+    pages_total: int | None = None
+    # Repos of the walk's own page 1 (name asc): a free provisional preview.
+    first_page: tuple[Repo, ...] | None = None
+
+    def first_page_landed(self, repos: list[Repo], pages_total: int | None) -> None:
+        self.first_page = tuple(repos)
+        self.pages_total = pages_total
+        self.pages_done += 1
+
+    def page_landed(self) -> None:
+        self.pages_done += 1
 
 
 @dataclass(frozen=True, slots=True)

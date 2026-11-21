@@ -68,7 +68,7 @@ export function ArchitecturePage() {
           >
             <h2 id="diagrams-title">Diagrams</h2>
             <p className="arch-lede">
-              Eight views of the system. Wide diagrams scroll sideways inside
+              Nine views of the system. Wide diagrams scroll sideways inside
               their card; use full screen to zoom and pan.
             </p>
             <div className="diagram-list">

@@ -17,6 +17,7 @@ dependencies = [
     "opentelemetry-instrumentation-logging==0.66b2",
     "python-json-logger>=4.2.0",
     "redis>=8.1.0",
+    "pyjwt[crypto]>=2.15.1",
 ]
 
 [build-system]
@@ -35,6 +36,7 @@ dev = [
     "ruff",
     "mypy",
     "fakeredis>=2.40.0",
+    "lupa>=2.8",
 ]
 
 [tool.ruff]

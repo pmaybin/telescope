@@ -67,3 +67,46 @@ class UpstreamUnavailable(UpstreamError):
 
 class UpstreamTimeout(UpstreamError):
     slug, status, title = "upstream-timeout", 504, "GitHub timed out"
+
+
+class ClientRejection(TelescopeError):
+    """The caller (not GitHub) was refused: authentication, policy or a per-user limit.
+    `reason` labels the `telescope.client_rejections` metric."""
+
+    reason = "rejected"
+    retry_after: int | None = None
+
+
+class Unauthorized(ClientRejection):
+    slug, status, title = "unauthorized", 401, "Authentication required"
+    reason = "unauthorized"
+
+
+class CrossSiteRequest(ClientRejection):
+    slug, status, title = "cross-site-request", 403, "Cross-site request refused"
+    reason = "cross_site"
+
+
+class OrgNotAllowed(ClientRejection):
+    slug, status, title = "org-not-allowed", 403, "Organisation not allowed"
+    reason = "org_not_allowed"
+
+
+class _Limited(ClientRejection):
+    def __init__(self, detail: str, *, retry_after: int) -> None:
+        super().__init__(detail)
+        self.retry_after = max(1, retry_after)
+
+
+class ClientRateLimited(_Limited):
+    slug, status, title = "client-rate-limited", 429, "Too many requests"
+    reason = "rate_limited"
+
+
+class UpstreamBudgetExceeded(_Limited):
+    slug, status, title = "upstream-budget-exceeded", 429, "Upstream request budget exceeded"
+    reason = "upstream_budget"
+
+    def __init__(self, detail: str, *, retry_after: int, pages_needed: int | None = None) -> None:
+        super().__init__(detail, retry_after=retry_after)
+        self.pages_needed = pages_needed

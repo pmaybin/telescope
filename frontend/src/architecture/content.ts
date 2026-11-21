@@ -1,11 +1,12 @@
 import diagram1 from './diagrams/01-context.mmd?raw'
 import diagram2 from './diagrams/02-classes.mmd?raw'
 import diagram3 from './diagrams/03-sequence-cold.mmd?raw'
-import diagram4 from './diagrams/04-sequence-refresh.mmd?raw'
-import diagram5 from './diagrams/05-cache-states.mmd?raw'
-import diagram6 from './diagrams/06-error-mapping.mmd?raw'
-import diagram7 from './diagrams/07-deployment-now.mmd?raw'
-import diagram8 from './diagrams/08-deployment-prod.mmd?raw'
+import diagram4 from './diagrams/04-sequence-progressive.mmd?raw'
+import diagram5 from './diagrams/05-sequence-refresh.mmd?raw'
+import diagram6 from './diagrams/06-cache-states.mmd?raw'
+import diagram7 from './diagrams/07-error-mapping.mmd?raw'
+import diagram8 from './diagrams/08-deployment-now.mmd?raw'
+import diagram9 from './diagrams/09-deployment-prod.mmd?raw'
 
 export type DiagramKind =
   'Component' | 'Class' | 'Sequence' | 'State' | 'Flow' | 'Deployment'
@@ -47,7 +48,7 @@ export const diagrams: DiagramEntry[] = [
     title: 'System context and components',
     kind: 'Component',
     summary:
-      'The browser talks only to nginx. nginx serves the SPA and proxies /api/ to the FastAPI app, which holds the cache, the GitHub client and the query engine. Telemetry leaves over OTLP/HTTP to the otel-lgtm container; Redis is an optional shared store.',
+      'The browser talks only to nginx. nginx serves the SPA and proxies /api/ to the FastAPI app. Every API request passes the cross-site guard, the Authenticator (a dev-minted JWT locally, the gateway JWT or Tailscale identity in production) and the RateLimiter before the route. The route reads the SnapshotService, or the PreviewService for a provisional first page, and every upstream call passes the UpstreamGovernor before the GitHub client, which talks to the REST API and, for stars previews, the Search API. Telemetry leaves over OTLP/HTTP to the otel-lgtm container; Redis is an optional shared store for snapshots and limiter buckets.',
     source: diagram1,
   },
   {
@@ -55,16 +56,24 @@ export const diagrams: DiagramEntry[] = [
     title: 'Domain model and classes',
     kind: 'Class',
     summary:
-      'The contract types from models.py, the cache and store types, the GitHub client, the query result and cursor, and the error hierarchy that problems.py maps to RFC 9457 responses.',
+      'The contract types from models.py (now including SnapshotInfo.complete and progress and PageInfo.provisional_reason), the cache and store types with Flight and LoadProgress, the PreviewService, the auth and rate-limit types (Principal, Authenticator, RateLimiter with in-memory and Redis implementations, UpstreamGovernor), the GitHub client, the query result and cursor, and the error hierarchy that problems.py maps to RFC 9457 responses.',
     source: diagram2,
   },
   {
     id: 'sequence-cold',
-    title: 'Cold request',
+    title: 'Cold request: the walk',
     kind: 'Sequence',
     summary:
-      'A miss walks page 1, learns the page count from Link rel=last, runs the budget guard, then fetches the remaining pages with at most 8 in flight. Concurrent identical requests share the one in-flight task.',
+      'What the walk does inside the flight: page 1, the page count from Link rel=last, the budget guard and the governor charge for the remaining pages, then at most 8 pages in flight. Concurrent identical requests share the one in-flight task. If it finishes within COLD_WAIT_MS the response is complete; otherwise see the progressive diagram.',
     source: diagram3,
+  },
+  {
+    id: 'sequence-progressive',
+    title: 'Progressive cold load',
+    kind: 'Sequence',
+    summary:
+      'Request, authentication and buckets, then a cold miss starts the walk charged to the initiator. After COLD_WAIT_MS the route answers 200 with a provisional page from one lazy preview call and a progress count (no-store, Retry-After 1). The client polls the same URL, which joins the flight at no upstream cost, until the snapshot lands and the response is complete.',
+    source: diagram4,
   },
   {
     id: 'sequence-refresh',
@@ -72,7 +81,7 @@ export const diagrams: DiagramEntry[] = [
     kind: 'Sequence',
     summary:
       'Inside the SWR window the cached snapshot is returned at once and refreshed in the background. After it, the client revalidates each page with If-None-Match; all 304s keep the same snapshot id. On upstream error a copy under 24h old is served as stale.',
-    source: diagram4,
+    source: diagram5,
   },
   {
     id: 'cache-states',
@@ -80,31 +89,31 @@ export const diagrams: DiagramEntry[] = [
     kind: 'State',
     summary:
       'Absent, Fetching, Fresh (under 600s), the SWR window (to 660s), Expired, Revalidating, Stale served (under 24h) and the error state beyond max-stale, plus the 60s negative cache for unknown orgs.',
-    source: diagram5,
+    source: diagram6,
   },
   {
     id: 'error-mapping',
-    title: 'GitHub error classification',
+    title: 'Request guards and error classification',
     kind: 'Flow',
     summary:
-      'How github/client.py classifies each GitHub response into a domain error, how retries use full jitter, and how problems.py and the stale rule turn that into a status code.',
-    source: diagram6,
+      'The guard chain first: 403 cross-site-request, 401 unauthorized, 429 client-rate-limited, 403 org-not-allowed, then the governor (the 503 reserve refusal, 429 upstream-budget-exceeded, or a 200 stale when the user is over budget and an expired snapshot exists). Then how github/client.py classifies each GitHub response into a domain error, how retries use full jitter, and how problems.py and the stale rule turn that into a status code.',
+    source: diagram7,
   },
   {
     id: 'deployment-now',
     title: 'Deployment today (Docker Compose)',
     kind: 'Deployment',
     summary:
-      'Four services: web on 8080, api on 8000, lgtm (Grafana 3000, OTLP 4317 and 4318) and an optional redis profile. GITHUB_TOKEN flows from .env into the api container only.',
-    source: diagram7,
+      'Four services: web on 8080, api on 8000, lgtm (Grafana 3000, OTLP 4317 and 4318) and an optional redis profile. GITHUB_TOKEN flows from .env into the api container only. AUTH_MODE=dev mints a 1h JWT at /api/dev/token; limiter buckets are in memory unless the redis profile is on.',
+    source: diagram8,
   },
   {
     id: 'deployment-prod',
     title: 'Target production deployment',
     kind: 'Deployment',
     summary:
-      'SSO in front of a CDN and ALB, at least two autoscaled api replicas, ElastiCache Redis for shared snapshots and a distributed lock, a refresher worker with a scheduler, GitHub App tokens from Secrets Manager, webhook invalidation, and an OTel gateway to Grafana Cloud.',
-    source: diagram8,
+      'A gateway (oauth2-proxy or Tailscale) in front of a CDN and ALB issues the identity the api verifies (JWKS or trusted proxy headers). At least two autoscaled api replicas, ElastiCache Redis for shared snapshots, a distributed lock and the limiter and budget buckets, a refresher worker with a scheduler, GitHub App tokens from Secrets Manager, webhook invalidation, and an OTel gateway to Grafana Cloud.',
+    source: diagram9,
   },
 ]
 
@@ -227,7 +236,7 @@ export const decisions: Decision[] = [
       'Jitter makes tests random unless rng and sleep are injected, which they are.',
     ],
     revisitWhen:
-      'We add per-user rate limiting, which would use 429 for our own callers.',
+      'Done in ADR-0013: 429 is now used for our own callers. Revisit if a gateway takes over per-user limiting.',
   },
   {
     adr: '0007',
@@ -313,7 +322,7 @@ export const decisions: Decision[] = [
     adr: '0011',
     title: 'Fast, offline, parallel-safe tests',
     decision:
-      'pytest with -n auto, respx at the transport level with a fixture builder that produces real Link and rate-limit headers, and injected now, sleep and rng so TTL, SWR and backoff are instant and deterministic. The query engine is tested with pure table-driven and seeded property-style walks. The frontend uses Vitest with MSW handlers typed from the same paths type. The suite is 162 backend and 14 frontend tests.',
+      'pytest with -n auto, respx at the transport level with a fixture builder that produces real Link and rate-limit headers, and injected now, sleep and rng so TTL, SWR and backoff are instant and deterministic. The query engine is tested with pure table-driven and seeded property-style walks. The frontend uses Vitest with MSW handlers typed from the same paths type. The suite is 253 backend and 48 frontend tests.',
     why: 'Tests must not depend on the network or on 60 requests an hour, and must not share state because agents work in parallel.',
     alternatives: [
       'The real GitHub API in tests: slow, flaky and burns quota.',
@@ -329,15 +338,64 @@ export const decisions: Decision[] = [
     ],
     revisitWhen: 'CI exists: add Schemathesis and Playwright against compose.',
   },
+  {
+    adr: '0012',
+    title: 'Progressive cold load: a fast provisional first page with progress',
+    decision:
+      'On a cold miss the snapshot walk runs as a Flight with observable LoadProgress. The route waits COLD_WAIT_MS (1.5s); if the snapshot has not landed it answers 200 with snapshot.complete=false, progress {pages_done, pages_total}, a null snapshot id, null cursors, Cache-Control no-store and Retry-After 1. Items come from one PreviewService call chosen by sort: the list endpoint with sort=full_name, updated or pushed, or the Search API for stars with the filters translated to qualifiers. A list preview is used only when it is provably an exact prefix of our ordering; otherwise items are empty and page.provisional_reason says why (preview-disabled, preview-skipped, preview-inexact, preview-unavailable). The client re-requests the same URL every second until complete; re-requests join the flight and reuse the cached preview, so polling costs no upstream call. The contract change is additive: complete defaults to true and the new fields are nullable.',
+    why: 'ADR-0002 stays right for every request after the first; only the blank 7 to 33s wait was wrong. Probing showed one call of about 1s returns exactly our first page for every sort. Results computed from the pages loaded so far would be wrong for any sort but name, so the first page must come from an upstream that sorts for us. First paint dropped to about 2.8s for google by stars (6.5s complete) and 1.5s for a free name preview.',
+    alternatives: [
+      'Block until complete (before): 7 to 33s of nothing.',
+      'Serve results from the pages loaded so far: correct only for name ascending, confidently wrong for stars.',
+      'A 202 plus a job resource to poll: a second resource and client state machine, and nothing to look at while waiting.',
+      'Server-Sent Events: nice UX but needs proxy_buffering off, multi-replica fan-out and more tests; kept as a drop-in upgrade.',
+      'Eager preview, started with the walk: saves about 1s more, but spends a call even when the walk finishes inside the wait. Rejected to minimise quota; opt-in follow-up tel-625.',
+    ],
+    tradeoffs: [
+      'Lazy preview: it starts only after the cold wait expires, so first paint is the wait plus the preview (about 2.7 to 2.8s), not 1.5s.',
+      'One preview per cold load per org (PREVIEW_MODE=first, the default): later filter or sort changes during the same load show progress only. A name ascending first query reuses page 1 of the walk and costs 0 extra calls; the worst case is N + 1 calls.',
+      'Search previews request per_page=limit, not 100: measured 2.9s for 100 results against about 1s for 30, and safe because Search applies the filters itself.',
+      'Search is index-backed and can lag the list endpoint, so the page is labelled provisional and the swap reconciles it. Search has its own quota (10 a minute tokenless); when exhausted the preview degrades to progress only, never to an error.',
+      'A filtered list preview is often inexact (microsoft updated plus python has about 21 Python repos in the newest 100, under the 30 needed), so those loads show progress only until tel-1w6.',
+      'Progress and previews live in process memory, so each replica reports its own (follow-up tel-aw3).',
+    ],
+    revisitWhen:
+      'Multiple replicas or proxies that tolerate long-lived connections: share progress in Redis and add an SSE transport with the same response shape (tel-aw3).',
+  },
+  {
+    adr: '0013',
+    title: 'Authentication, per-user rate limiting and GitHub-quota protection',
+    decision:
+      "Every API request gets a Principal from an Authenticator selected by AUTH_MODE: dev (the app mints a 1h HS256 JWT at /api/dev/token and the SPA sends it as a bearer), jwt (the gateway's JWT verified against its JWKS, asymmetric algorithms only), tailscale (Tailscale-User-Login, trusted only from AUTH_TRUSTED_PROXIES) or none (anonymous, keyed by client IP, for tests). Missing or invalid credentials are 401 unauthorized. A cross-site guard returns 403 cross-site-request for Sec-Fetch-Site: cross-site. Token buckets then limit two things per principal: the request rate (120 a minute, burst 30, 429 client-rate-limited) and upstream spend (100 calls per 10 minutes, 429 upstream-budget-exceeded). Spend is charged to whoever initiates the call: page 1 first, then the remaining pages atomically before fanning out, so an unaffordable walk is refused before it spends anything; 404 lookups and previews are charged too; cache hits and joining someone else's flight cost 0. User spend may not take GitHub's remaining below a 20% reserve, which background SWR refreshes (the system principal, never charged) can use; a refusal is the existing 503 upstream-rate-limited. At most 2 org walks run at once. ORG_ALLOWLIST is off by default and gives 403 org-not-allowed when set. Buckets are in memory, or Redis Lua scripts when CACHE_BACKEND=redis so limits hold across replicas.",
+    why: "The scarce resource is GitHub quota, not CPU. One client looping over random org names could drain 60 an hour tokenless in about a minute, or 5,000 an hour with a token in about an hour, and starve everyone else. A request-count limit cannot see that, so the limit is on upstream spend, per user, which needs an identity. The deployment is internal, so we trust the gateway's identity rather than build a login; dev mode mints tokens so local runs exercise the same verification path and limiter.",
+    alternatives: [
+      'Client IP only: NAT merges users and X-Forwarded-For is spoofable.',
+      'An app-managed login: duplicates the gateway.',
+      'nginx limit_req only: coarse, and blind to cache hits against upstream spend. It can be added later as an outer layer.',
+      'CSRF tokens: see the trade-offs; not applicable here.',
+      'A request-rate limit without a spend limit: does not stop a quota-draining walk.',
+    ],
+    tradeoffs: [
+      'CSRF protection is not applicable: the API is read-only and the bearer token in Authorization is never sent automatically. The real cross-site risk is a hostile page making a victim browser burn quota with simple GETs. Requiring Authorization forces a CORS preflight we never allow, and the Sec-Fetch-Site guard rejects cross-site outright. Cookie sessions would need SameSite=Strict plus a CSRF token.',
+      'A user over budget on an expired snapshot is served stale (200, stale=true) instead of a 429: the data exists and the budget protects GitHub, not the cache. Found during integration.',
+      'A dev token is not a security boundary: anyone who can reach the API can mint one, so production must run jwt or tailscale.',
+      "Previews and 404 lookups are charged too, so probing random orgs spends the prober's budget, not the shared one. Verified live: mallory spent 91 calls and was refused with a 429 and Retry-After while alice was still served.",
+      'Metrics carry no per-user labels to avoid cardinality blow-up; per-user breakdowns come from Loki logs, which carry the principal.',
+      'New 401, 403 and 429 problem types enter the contract and the generated client.',
+    ],
+    revisitWhen:
+      'Production goes live: verify gateway JWTs with JWKS rotation and add audit logs; move to per-tenant budgets if users map to teams.',
+  },
 ]
 
 export const roadmap: RoadmapArea[] = [
   {
     area: 'Topology and scaling',
-    now: 'One process by default with an in-memory LRU of 256 orgs. A Redis store exists for sharing snapshots, but single-flight and the negative cache are per process, so replicas can each refresh the same org.',
+    now: 'One process by default with an in-memory LRU of 256 orgs. A Redis store exists for sharing snapshots and, with it, the rate-limiter buckets, but single-flight, the negative cache, load progress and preview results are per process, so replicas can each refresh the same org and each report its own progress.',
     next: [
       'Run at least two api replicas behind a load balancer, autoscaled on CPU and request latency.',
       'Make Redis the default store and add a distributed single-flight lock: SET key NX PX with a TTL a little above the cold-fetch time, losers poll the snapshot key (or a pub/sub channel) with a bounded wait, then fall back to fetching on timeout.',
+      'Share load progress through Redis (progress:{org} with a short TTL) so any replica can answer a poll, and add an optional SSE transport with the same response shape (tel-aw3).',
       'Move the 60s negative cache into Redis.',
       'Size memory: about 8.5k repos (microsoft) is a few MB of JSON per org; set maxmemory with an allkeys-lru policy and alert on evictions.',
       'Keep filtering in memory while orgs stay under tens of thousands of repos; move to Postgres or SQL with indexes on (language, stars) once snapshots are persisted for history or the in-memory sort shows up in p95.',
@@ -346,37 +404,38 @@ export const roadmap: RoadmapArea[] = [
   },
   {
     area: 'Data freshness',
-    now: 'Refresh happens on demand: a request past TTL plus the 60s SWR window waits for revalidation, and a request inside the window triggers one background refresh.',
+    now: 'Refresh happens on demand: a request past TTL plus the 60s SWR window waits for revalidation, and a request inside the window triggers one background refresh. PREWARM_ORGS warms the listed orgs at startup and keeps them warm through SWR. A cold org no longer blocks: it returns a provisional first page and progress (ADR-0012).',
     next: [
-      'A refresher worker driven by a scheduler that refreshes entries before they expire (refresh-ahead) so users never see a synchronous revalidation.',
-      'Warm-up of popular orgs at deploy time.',
+      'A refresher worker driven by a scheduler that refreshes entries before they expire (refresh-ahead) so users never see a synchronous revalidation, and that owns the prewarm list instead of an environment variable.',
       'GitHub webhooks (repository events) to invalidate or refresh the affected org immediately, with the TTL as the safety net.',
-      'For huge cold orgs, return 202 with progress, or stream the first page of results while the walk continues, instead of holding the request for 30 seconds.',
+      'Stream progress over SSE rather than polling once more than one replica serves a load (tel-aw3).',
     ],
-    why: 'A 13 second cold request is acceptable for a demo and not for a product.',
+    why: 'First paint is now 1.5 to 2.8s, but the complete answer for a big cold org still takes 15s or more, so the fix is to make cold loads rare.',
   },
   {
     area: 'GitHub access',
-    now: 'One optional personal access token, 5,000 requests an hour with it and 60 without. Concurrency is a fixed 8.',
+    now: 'One optional personal access token, 5,000 requests an hour with it and 60 without. Concurrency is a setting, 8 with a token. Per-user budgets and a 20% reserve keep one caller from draining it. Stars previews use the separate Search quota.',
     next: [
       'Use a GitHub App: installation tokens are short lived, rotate automatically and have their own per-installation limits.',
       'Add a token pool with a per-token budget scheduler that picks the token with the most remaining quota.',
       'Treat secondary limits as feedback: on a secondary-limit response or Retry-After, lower page concurrency adaptively and recover slowly.',
+      'Opt-in eager preview that starts with the walk, trading one extra call for about a second off first paint (tel-625).',
+      'Use Search with sort=updated plus filter qualifiers so filtered updated and pushed previews are exact instead of progress only (tel-1w6).',
     ],
-    why: 'One shared token is a single point of exhaustion.',
+    why: 'One shared token is a single point of exhaustion; the per-user budget limits who can drain it, not how big it is.',
   },
   {
     area: 'Security',
-    now: 'Public, unauthenticated API for local use. The token is a SecretStr with log redaction, and CORS allows only GET from configured origins.',
+    now: 'Authentication exists: every request has a Principal (a dev-minted JWT locally, a gateway JWT or Tailscale identity in production), with per-user request and upstream-spend limits, a cross-site guard, an optional org allowlist, an nginx CSP and security headers, and principal in every log line. The token is a SecretStr with log redaction, and CORS is dev-only.',
     next: [
-      'SSO through an OIDC proxy in front of the SPA and API, since this is an internal tool.',
-      'Per-user rate limiting on our API with a Redis token bucket, returning 429.',
+      'Put a real SSO gateway (oauth2-proxy, Cloudflare Access or Tailscale) in front in production and run AUTH_MODE=jwt or tailscale; the dev mint is not a security boundary.',
+      'Rotate credentials: JWKS key rotation on the gateway, short-lived tokens, and GitHub App installation tokens in place of a PAT.',
+      'Audit logs: who requested which org, who was refused and why, shipped to durable storage with retention.',
       'Inject secrets at runtime from AWS Secrets Manager, Doppler or 1Password.',
-      'CSP and security headers at nginx or the CDN.',
       'Distroless, non-root, read-only-filesystem images, signed with cosign and shipped with an SBOM; Renovate for dependency updates.',
       'Kubernetes network policies allowing api to reach only Redis, the collector and api.github.com.',
     ],
-    why: 'Moving from a local demo to a shared service changes who can call it.',
+    why: 'Moving from a local demo to a shared service changes who can call it; identity now exists, so the remaining work is making it trustworthy.',
   },
   {
     area: 'Reliability',
@@ -404,7 +463,7 @@ export const roadmap: RoadmapArea[] = [
   },
   {
     area: 'Delivery',
-    now: 'No CI by decision. make lint and make test run formatters, type checks, 162 backend and 14 frontend tests and both contract drift checks.',
+    now: 'No CI by decision. make lint and make test run formatters, type checks, 253 backend and 48 frontend tests and both contract drift checks.',
     next: [
       'CI pipeline: lint, tests, contract drift, Schemathesis against the ASGI app, Playwright end-to-end against compose, image build and vulnerability scan.',
       'Preview environments per pull request.',
@@ -433,14 +492,16 @@ export const overview: Overview = {
   paragraphs: [
     "Telescope serves GET /api/orgs/{org}/repos to a React SPA. GitHub's list endpoint cannot filter by language or stars and cannot sort by stars, so the backend walks every public page of an org once, builds an immutable snapshot, and does all filtering, sorting and pagination in memory.",
     'Requests are cheap once a snapshot exists: a warm request takes about 30ms and costs no GitHub quota. A cold fetch is the expensive path (google: 2,946 repos in 30 pages, 13s tokenless at concurrency 4 and 7.3s with a token at concurrency 8; microsoft: 8,474 repos in 85 pages, 33s at concurrency 4), so most of the design protects that path: single-flight, a budget guard, ETag revalidation, stale-while-revalidate and serve-stale-on-error.',
-    'The pieces are layered and depend only downwards through small interfaces: GitHubClient (I/O), SnapshotService over a SnapshotStore (memory or Redis), a pure query engine, then the route. Models and errors are dependency-free, openapi.json is generated from them, and the frontend client is generated from openapi.json.',
+    'Round two changed what a cold load feels like and who pays for it. A cold request no longer blocks: after a 1.5s wait it returns a provisional but exact first page from one cheap upstream call, plus a progress count, and the client polls until the snapshot completes (ADR-0012). Measured with a token: google by stars paints its exact top 30 after 2.8s and completes at 6.5s, where it used to show nothing for 6.5s; kubernetes-sigs by name paints at 1.5s with a free preview and completes at 2.6s; microsoft by updated plus python paints progress at 2.7s and completes at 15.7s. The scarce resource is GitHub quota, not CPU, so it is budgeted per user: each request carries an identity, and the upstream calls a request starts are charged to it, with a global reserve kept for background refreshes (ADR-0013).',
+    'The pieces are layered and depend only downwards through small interfaces: GitHubClient (I/O), SnapshotService over a SnapshotStore (memory or Redis), a pure query engine, then the route, which sits behind authentication, a rate limiter and an UpstreamGovernor. Models and errors are dependency-free, openapi.json is generated from them, and the frontend client is generated from openapi.json.',
   ],
   principles: [
     'Contract-first: models.py is the source of truth, openapi.json and the TypeScript types are generated from it, and drift fails a test.',
     'Fetch once, query locally: upstream call count is independent of client traffic.',
     'Never cache partial data: a Snapshot exists only for a complete page walk, so a failed fetch stores nothing.',
-    'Degrade to stale rather than fail: any upstream error becomes a 200 with snapshot.stale=true while a copy under 24h old exists.',
-    'The quota is a budget: rate-limit headers are tracked on every response, and a guard refuses a doomed walk after page 1.',
-    'Observable by default: request ids, JSON logs with trace ids, OpenTelemetry metrics and traces, and a provisioned Grafana dashboard.',
+    'Degrade to stale rather than fail: any upstream error becomes a 200 with snapshot.stale=true while a copy under 24h old exists, and so does a user who is over budget.',
+    'The quota is a budget, per user: rate-limit headers are tracked on every response, a guard refuses a doomed walk after page 1, and upstream spend is charged to the user who starts it, with a global reserve for background refreshes (ADR-0013).',
+    'Paint something exact early: a cold load returns a provisional first page and progress instead of blocking, and never shows an approximation as final (ADR-0012).',
+    'Observable by default: request ids, JSON logs with trace ids and principal, OpenTelemetry metrics and traces, and a provisioned Grafana dashboard.',
   ],
 }

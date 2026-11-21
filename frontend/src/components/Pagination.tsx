@@ -4,12 +4,13 @@ import {
   ChevronsLeft,
   ChevronsRight,
 } from 'lucide-react'
-import type { RepoPage } from '../api/client'
+import type { ProgressivePage } from '../api/progressive'
+import { isComplete } from '../api/progressive'
 import { formatNumber } from '../format'
 import type { Patch } from './FilterBar'
 
 type Props = {
-  data: RepoPage
+  data: ProgressivePage
   paging: 'cursor' | 'offset'
   offset: number
   limit: number
@@ -53,30 +54,38 @@ export function Pagination({ data, paging, offset, limit, onChange }: Props) {
       : offsetMode
         ? `${formatNumber(offset + 1)}–${formatNumber(offset + count)}`
         : formatNumber(count)
-  const pages = Math.max(1, Math.ceil(total / limit))
+  const loading = !isComplete(data)
+  const known = total !== null
+  const pages = known ? Math.max(1, Math.ceil(total / limit)) : 1
   const lastOffset = (pages - 1) * limit
-  const atEnd = offset + limit >= total
+  const atEnd = loading || !known || offset + limit >= total
+  const wait = 'Available once loading finishes'
 
   return (
     <nav className="pagination" aria-label="Pagination">
       <span>
-        Showing <strong>{range}</strong> of{' '}
-        <strong>{formatNumber(total)}</strong>
+        Showing <strong>{range}</strong>
+        {known && (
+          <>
+            {' '}
+            of <strong>{formatNumber(total)}</strong>
+          </>
+        )}
       </span>
       {offsetMode ? (
         <div className="pager-controls">
           <IconButton
             label="First"
-            title="First page"
-            disabled={offset === 0}
+            title={loading ? wait : 'First page'}
+            disabled={loading || offset === 0}
             onClick={() => onChange({ offset: undefined })}
           >
             <ChevronsLeft size={16} />
           </IconButton>
           <IconButton
             label="Prev"
-            title="Previous page"
-            disabled={offset === 0}
+            title={loading ? wait : 'Previous page'}
+            disabled={loading || offset === 0}
             onClick={() =>
               onChange({ offset: String(Math.max(0, offset - limit)) })
             }
@@ -84,11 +93,13 @@ export function Pagination({ data, paging, offset, limit, onChange }: Props) {
             <ChevronLeft size={16} />
           </IconButton>
           <span className="page-indicator">
-            {`Page ${formatNumber(Math.floor(offset / limit) + 1)} of ${formatNumber(pages)}`}
+            {known
+              ? `Page ${formatNumber(Math.floor(offset / limit) + 1)} of ${formatNumber(pages)}`
+              : `Page ${formatNumber(Math.floor(offset / limit) + 1)}`}
           </span>
           <IconButton
             label="Next"
-            title="Next page"
+            title={loading ? wait : 'Next page'}
             disabled={atEnd}
             onClick={() => onChange({ offset: String(offset + limit) })}
           >
@@ -96,7 +107,7 @@ export function Pagination({ data, paging, offset, limit, onChange }: Props) {
           </IconButton>
           <IconButton
             label="Last"
-            title="Last page"
+            title={loading ? wait : 'Last page'}
             disabled={atEnd}
             onClick={() => onChange({ offset: String(lastOffset) })}
           >
@@ -107,8 +118,8 @@ export function Pagination({ data, paging, offset, limit, onChange }: Props) {
         <div className="pager-controls">
           <IconButton
             label="Prev"
-            title="Previous page"
-            disabled={!data.page.has_prev || !data.page.prev_cursor}
+            title={loading ? wait : 'Previous page'}
+            disabled={loading || !data.page.has_prev || !data.page.prev_cursor}
             onClick={() =>
               onChange({ cursor: data.page.prev_cursor ?? undefined })
             }
@@ -117,8 +128,8 @@ export function Pagination({ data, paging, offset, limit, onChange }: Props) {
           </IconButton>
           <IconButton
             label="Next"
-            title="Next page"
-            disabled={!data.page.has_next || !data.page.next_cursor}
+            title={loading ? wait : 'Next page'}
+            disabled={loading || !data.page.has_next || !data.page.next_cursor}
             onClick={() =>
               onChange({ cursor: data.page.next_cursor ?? undefined })
             }

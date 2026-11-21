@@ -176,6 +176,7 @@ describe('App', () => {
           fetched_at: '2026-11-17T10:00:00Z',
           repo_count: 1,
           stale: true,
+          complete: true,
           cursor_from_older_snapshot: false,
         },
       }),
@@ -345,5 +346,72 @@ describe('App', () => {
     expect(localStorage.getItem('telescope-theme')).toBe('light')
     localStorage.removeItem('telescope-theme')
     document.documentElement.removeAttribute('data-theme')
+  })
+})
+
+describe('auth and quota problems', () => {
+  const problem = (slug: string, status: 401 | 403 | 429, extra = {}) =>
+    server.use(
+      http.get('/api/orgs/{org}/repos', ({ response }) =>
+        response(status).json(
+          {
+            type: `https://telescope.local/problems/${slug}`,
+            title: slug,
+            status,
+            ...extra,
+          },
+          { headers: PROBLEM_HEADERS },
+        ),
+      ),
+    )
+
+  it('shows a countdown for client-rate-limited and auto-retries', async () => {
+    let calls = 0
+    server.use(
+      http.get('/api/orgs/{org}/repos', ({ response }) => {
+        calls++
+        if (calls > 1)
+          return response(200).json(makePage({ items: [makeRepo()] }))
+        return response(429).json(
+          {
+            type: 'https://telescope.local/problems/client-rate-limited',
+            title: 'Too many requests',
+            status: 429,
+            retry_after: 1,
+          },
+          { headers: PROBLEM_HEADERS },
+        )
+      }),
+    )
+    open('?org=acme')
+    expect(
+      await screen.findByText(/slow down — try again in 1s/i),
+    ).toBeInTheDocument()
+    expect(
+      await screen.findByText('guava', {}, { timeout: 4000 }),
+    ).toBeInTheDocument()
+    expect(calls).toBe(2)
+  })
+
+  it('explains an exhausted upstream budget', async () => {
+    problem('upstream-budget-exceeded', 429, { retry_after: 120 })
+    open('?org=acme')
+    expect(
+      await screen.findByText(/cached orgs still work/i),
+    ).toHaveTextContent(/retry in 2 min/i)
+  })
+
+  it('explains an org that is not allowlisted', async () => {
+    problem('org-not-allowed', 403)
+    open('?org=acme')
+    expect(
+      await screen.findByText(/isn't on the allowlist/i),
+    ).toBeInTheDocument()
+  })
+
+  it('shows not signed in on 401', async () => {
+    problem('unauthorized', 401)
+    open('?org=acme')
+    expect(await screen.findByText('Not signed in')).toBeInTheDocument()
   })
 })

@@ -1,6 +1,56 @@
 {
   "components": {
     "schemas": {
+      "DevToken": {
+        "properties": {
+          "access_token": {
+            "title": "Access Token",
+            "type": "string"
+          },
+          "expires_in": {
+            "description": "Seconds until the token expires.",
+            "title": "Expires In",
+            "type": "integer"
+          },
+          "token_type": {
+            "default": "Bearer",
+            "title": "Token Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "access_token",
+          "expires_in"
+        ],
+        "title": "DevToken",
+        "type": "object"
+      },
+      "DevTokenRequest": {
+        "properties": {
+          "sub": {
+            "default": "dev-user",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Sub",
+            "type": "string"
+          }
+        },
+        "title": "DevTokenRequest",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
       "License": {
         "properties": {
           "name": {
@@ -75,10 +125,35 @@
             ],
             "title": "Prev Cursor"
           },
+          "provisional_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "preview-disabled",
+                  "preview-skipped",
+                  "preview-inexact",
+                  "preview-unavailable"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why a provisional response (`snapshot.complete` false) has no items: there is no trustworthy first page yet. Null when complete, or when the provisional items are an exact first page.",
+            "title": "Provisional Reason"
+          },
           "total": {
-            "description": "Number of repositories matching the filters.",
-            "title": "Total",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Number of repositories matching the filters. Null while the snapshot is still loading (`snapshot.complete` false), unless the provisional page came from Search.",
+            "title": "Total"
           }
         },
         "required": [
@@ -160,6 +235,33 @@
           "status"
         ],
         "title": "Problem",
+        "type": "object"
+      },
+      "ProgressInfo": {
+        "properties": {
+          "pages_done": {
+            "description": "Upstream pages fetched so far.",
+            "title": "Pages Done",
+            "type": "integer"
+          },
+          "pages_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Upstream pages needed; null until page 1 lands.",
+            "title": "Pages Total"
+          }
+        },
+        "required": [
+          "pages_done",
+          "pages_total"
+        ],
+        "title": "ProgressInfo",
         "type": "object"
       },
       "RateLimitInfo": {
@@ -392,26 +494,64 @@
       },
       "SnapshotInfo": {
         "properties": {
+          "complete": {
+            "default": true,
+            "description": "False while the cold load is still running: the response is provisional, paging is disabled and the client should re-request after `Retry-After`.",
+            "title": "Complete",
+            "type": "boolean"
+          },
           "cursor_from_older_snapshot": {
             "description": "True when the cursor was issued against a different snapshot; rows whose sort key changed may have moved.",
             "title": "Cursor From Older Snapshot",
             "type": "boolean"
           },
           "fetched_at": {
-            "description": "When the dataset was last fetched or revalidated.",
-            "format": "date-time",
-            "title": "Fetched At",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the dataset was last fetched or revalidated. Null while loading.",
+            "title": "Fetched At"
           },
           "id": {
-            "description": "Content hash of the upstream dataset this page was computed from.",
-            "title": "Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Content hash of the upstream dataset this page was computed from. Null while the snapshot is still loading.",
+            "title": "Id"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProgressInfo"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Load progress; non-null only when `complete` is false."
           },
           "repo_count": {
-            "description": "Repositories in the org before filtering.",
-            "title": "Repo Count",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Repositories in the org before filtering. Null while loading.",
+            "title": "Repo Count"
           },
           "stale": {
             "description": "True when served past its TTL because GitHub was unavailable or rate limited.",
@@ -446,6 +586,46 @@
         ],
         "title": "SortOrder",
         "type": "string"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
       }
     }
   },
@@ -455,6 +635,64 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/dev/token": {
+      "post": {
+        "operationId": "createDevToken",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/DevTokenRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevToken"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Cross-site request, or organisation not on the allowlist"
+          },
+          "404": {
+            "description": "Not in dev auth mode"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mint a short-lived dev JWT (AUTH_MODE=dev only; not a security boundary)"
+      }
+    },
     "/api/orgs/{org}/repos": {
       "get": {
         "operationId": "listOrgRepos",
@@ -634,15 +872,21 @@
             "description": "A page of repositories.",
             "headers": {
               "Cache-Control": {
-                "description": "`private, max-age=60`, or `no-cache` when stale.",
+                "description": "`private, max-age=60`, `no-cache` when stale, or `no-store` on provisional pages.",
                 "schema": {
                   "type": "string"
                 }
               },
               "ETag": {
-                "description": "Weak validator for this page.",
+                "description": "Weak validator for this page (absent on provisional pages).",
                 "schema": {
                   "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait before re-requesting; only on provisional pages (`snapshot.complete` false).",
+                "schema": {
+                  "type": "integer"
                 }
               },
               "X-GitHub-RateLimit-Limit": {
@@ -678,6 +922,26 @@
             },
             "description": "Invalid cursor or pagination parameters"
           },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or invalid credentials (`WWW-Authenticate: Bearer`)"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Cross-site request, or organisation not on the allowlist"
+          },
           "404": {
             "content": {
               "application/problem+json": {
@@ -697,6 +961,16 @@
               }
             },
             "description": "Invalid query parameters"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Per-client request rate or upstream-call budget exceeded (see Retry-After)"
           },
           "502": {
             "content": {

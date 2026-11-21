@@ -15,3 +15,5 @@ MADR-style records for telescope. All are **Accepted** as of 2026-11-17. See als
 | [0009](0009-observability.md) | Observability | OTel -> otel-lgtm, JSON logs with trace/request ids, metric facade, provisioned dashboard |
 | [0010](0010-api-contract-and-client-codegen.md) | API contract and client codegen | Committed `openapi.json`, openapi-typescript + openapi-fetch, drift checks |
 | [0011](0011-test-strategy-and-parallelism.md) | Test strategy and parallelism | xdist, respx, injected clock/sleep/rng, Vitest + MSW, concurrent `make test` |
+| [0012](0012-progressive-cold-load.md) | Progressive cold load | Provisional exact first page from a one-call preview (list sort / Search), progress polling, prewarm |
+| [0013](0013-auth-and-quota-protection.md) | Auth, per-user rate limiting, quota protection | Dev-minted JWT / gateway JWT / Tailscale identity, request + upstream-spend buckets, global reserve, allowlist (off) |

@@ -54,6 +54,13 @@ async def make_client(clock: Clock, mock: respx.MockRouter) -> AsyncIterator[Cli
 
     def factory(token: str | None = None, **settings: object) -> httpx.AsyncClient:
         settings.setdefault("github_max_retries", 1)
+        # Existing API suites exercise caching/queries, not auth or quotas (see tests/auth,
+        # tests/ratelimit): anonymous mode and effectively unlimited budgets.
+        settings.setdefault("auth_mode", "none")
+        settings.setdefault("user_rate_per_min", 1_000_000)
+        settings.setdefault("user_rate_burst", 1_000_000)
+        settings.setdefault("user_upstream_budget", 1_000_000)
+        settings.setdefault("upstream_reserve_fraction", 0.0)
         app = create_app(Settings(github_token=token, **settings), sleep=no_sleep, now=clock)  # type: ignore[arg-type]
         apps.append(app)
         client = httpx.AsyncClient(

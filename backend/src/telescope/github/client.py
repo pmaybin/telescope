@@ -8,8 +8,9 @@ import random
 import re
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -23,8 +24,11 @@ from telescope.errors import (
     UpstreamUnavailable,
 )
 from telescope.github.mapping import parse_repo
-from telescope.models import RateLimitState, Repo, Snapshot
+from telescope.models import LoadProgress, RateLimitState, Repo, Snapshot
 from telescope.observability import metrics
+
+if TYPE_CHECKING:
+    from telescope.ratelimit import UpstreamGovernor
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +63,15 @@ def _int_header(response: httpx.Response, name: str) -> int | None:
         return None
 
 
+@dataclass(frozen=True, slots=True)
+class SearchPreview:
+    """Result of one Search API call used as a provisional first page."""
+
+    repos: list[Repo]
+    total_count: int | None
+    incomplete: bool
+
+
 class GitHubClient:
     def __init__(
         self,
@@ -73,7 +86,9 @@ class GitHubClient:
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         rng: random.Random | None = None,
         now: Callable[[], datetime] = _utc_now,
+        governor: UpstreamGovernor | None = None,
     ) -> None:
+        self._governor = governor
         self._http = http
         self._token = token
         self._base_url = base_url.rstrip("/")
@@ -92,9 +107,14 @@ class GitHubClient:
 
     # ------------------------------------------------------------------ public
 
-    async def fetch_org_repos(self, org: str, previous: Snapshot | None = None) -> Snapshot:
+    async def fetch_org_repos(
+        self,
+        org: str,
+        previous: Snapshot | None = None,
+        progress: LoadProgress | None = None,
+    ) -> Snapshot:
         try:
-            snapshot, pages, revalidated = await self._fetch(org, previous)
+            snapshot, pages, revalidated = await self._fetch(org, previous, progress)
         except UpstreamError:
             metrics.upstream_fetch("error", 0)
             raise
@@ -103,7 +123,9 @@ class GitHubClient:
 
     # ------------------------------------------------------------------ walk
 
-    async def _fetch(self, org: str, previous: Snapshot | None) -> tuple[Snapshot, int, bool]:
+    async def _fetch(
+        self, org: str, previous: Snapshot | None, progress: LoadProgress | None = None
+    ) -> tuple[Snapshot, int, bool]:
         prev_etags = previous.page_etags if previous else {}
         prev_pages = len(prev_etags)
 
@@ -121,10 +143,15 @@ class GitHubClient:
         else:
             total = 1 if "next" not in links else 0  # 0 = follow `next` sequentially
         results[1] = self._page_result(first, previous, 1)
+        if progress is not None:
+            progress.first_page_landed(results[1][0], total or None)
 
         if total and total > 1:
             self._check_budget(total)
-            await self._fetch_rest(org, total, etag_for, previous, results)
+            # Charge the whole fan-out atomically *before* it starts: a walk the caller
+            # cannot afford is refused without burning any further upstream calls.
+            await self._govern(total - 1, pages_needed=total)
+            await self._fetch_rest(org, total, etag_for, previous, results, progress)
         elif total == 0:
             n = 1
             while "next" in links:
@@ -132,6 +159,8 @@ class GitHubClient:
                 resp = await self._get_page(org, n, etag_for(n))
                 links = _link_pages(resp.headers.get("link"))
                 results[n] = self._page_result(resp, previous, n)
+                if progress is not None:
+                    progress.page_landed()
             total = n
 
         repos: list[Repo] = []
@@ -158,13 +187,16 @@ class GitHubClient:
         etag_for: Callable[[int], str | None],
         previous: Snapshot | None,
         results: dict[int, tuple[list[Repo], str | None, bool]],
+        progress: LoadProgress | None = None,
     ) -> None:
         semaphore = asyncio.Semaphore(self._page_concurrency)
 
         async def one(n: int) -> None:
             async with semaphore:
-                resp = await self._get_page(org, n, etag_for(n))
+                resp = await self._get_page(org, n, etag_for(n), charge=False)
             results[n] = self._page_result(resp, previous, n)
+            if progress is not None:
+                progress.page_landed()
 
         try:
             async with asyncio.TaskGroup() as tg:
@@ -218,7 +250,90 @@ class GitHubClient:
             headers["If-None-Match"] = etag
         return headers
 
-    async def _get_page(self, org: str, page: int, etag: str | None) -> httpx.Response:
+    async def _govern(
+        self, cost: int, *, pages_needed: int | None = None, core: bool = True
+    ) -> None:
+        if self._governor is not None:
+            # Search has its own upstream quota: the core reserve (which protects background
+            # refreshes of the core walk) does not apply to it, but the per-user budget does.
+            state = (
+                self._rate_limit if core else RateLimitState(authenticated=self._token is not None)
+            )
+            await self._governor.charge(cost, state, pages_needed=pages_needed)
+
+    # ------------------------------------------------------------------ previews (ADR-0012)
+
+    async def preview_list(self, org: str, *, sort: str, direction: str) -> list[Repo]:
+        """One list call (first 100 repos in `sort`/`direction`) used as a provisional page.
+        Charged to the current principal; single attempt, never retried."""
+        await self._govern(1)
+        path = f"/orgs/{org}/repos"
+        params: dict[str, Any] = {
+            "type": "public",
+            "sort": sort,
+            "direction": direction,
+            "per_page": PER_PAGE,
+        }
+        body = await self._get_once(path, params, org)
+        if not isinstance(body, list):
+            raise UpstreamUnavailable("Unexpected GitHub preview response.")
+        return self._parse_items(body)
+
+    async def preview_search(
+        self, org: str, *, q: str, order: str, per_page: int = PER_PAGE
+    ) -> SearchPreview:
+        """One Search API call (top `per_page` by stars) used as a provisional page. Search has its
+        own quota: its rate-limit headers never touch the core state."""
+        await self._govern(1, core=False)
+        params: dict[str, Any] = {
+            "q": q,
+            "sort": "stars",
+            "order": order,
+            "per_page": max(1, min(per_page, PER_PAGE)),
+        }
+        body = await self._get_once("/search/repositories", params, org)
+        if not isinstance(body, dict) or not isinstance(body.get("items"), list):
+            raise UpstreamUnavailable("Unexpected GitHub search response.")
+        total = body.get("total_count")
+        return SearchPreview(
+            repos=self._parse_items(body["items"]),
+            total_count=total if isinstance(total, int) else None,
+            incomplete=bool(body.get("incomplete_results", False)),
+        )
+
+    @staticmethod
+    def _parse_items(items: list[Any]) -> list[Repo]:
+        try:
+            return [parse_repo(item) for item in items]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise UpstreamUnavailable(f"Unexpected GitHub preview response: {exc}") from exc
+
+    async def _get_once(self, path: str, params: dict[str, Any], org: str) -> Any:
+        started = time.perf_counter()
+        try:
+            response = await self._http.get(
+                self._base_url + path, params=params, headers=self._headers(None)
+            )
+        except httpx.TimeoutException as exc:
+            metrics.github_request(None, time.perf_counter() - started)
+            raise UpstreamTimeout("GitHub preview timed out.") from exc
+        except httpx.TransportError as exc:
+            metrics.github_request(None, time.perf_counter() - started)
+            raise UpstreamUnavailable(
+                f"GitHub preview failed (network error: {type(exc).__name__})."
+            ) from exc
+        self._observe(response, path, 0, time.perf_counter() - started)
+        self._raise_for_status(response, org)
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise UpstreamUnavailable("GitHub preview returned invalid JSON.") from exc
+
+    async def _get_page(
+        self, org: str, page: int, etag: str | None, *, charge: bool = True
+    ) -> httpx.Response:
+        if charge:
+            await self._govern(1)  # once per logical page; retries are not charged again
         path = f"/orgs/{org}/repos"
         params: dict[str, Any] = {
             "type": "public",
@@ -273,6 +388,23 @@ class GitHubClient:
             await self._sleep(delay)
 
     def _observe(self, response: httpx.Response, path: str, page: int, duration: float) -> None:
+        resource = response.headers.get("x-ratelimit-resource")
+        if resource is not None and resource != "core":
+            # Search (and other resources) have their own quota: they must not overwrite the
+            # core state that the budget guard and the reserve rely on.
+            metrics.github_request(response.status_code, duration)
+            logger.log(
+                logging.INFO,
+                "GitHub request",
+                extra={
+                    "github_path": path,
+                    "page": page,
+                    "status_code": response.status_code,
+                    "duration_ms": round(duration * 1000, 1),
+                    "ratelimit_resource": resource,
+                },
+            )
+            return
         limit = _int_header(response, "x-ratelimit-limit")
         remaining = _int_header(response, "x-ratelimit-remaining")
         reset = _int_header(response, "x-ratelimit-reset")
