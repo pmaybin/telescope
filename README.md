@@ -47,6 +47,45 @@ make dev        # same URLs as `make up`; edits to backend/src and frontend/src 
 
 `.env` (git-ignored) -> `docker compose --env-file .env` -> the `api` container environment -> `Settings.github_token` (a pydantic `SecretStr`) -> the `Authorization` header on GitHub requests. The token is never baked into an image, and a logging filter redacts it from log output. In production, inject `GITHUB_TOKEN` from Doppler, 1Password Connect or AWS Secrets Manager rather than a file ([ADR-0008](docs/adr/0008-secrets.md)).
 
+## Auth and quota protection
+
+The scarce resource is GitHub quota, so limits apply to upstream spend per principal ([ADR-0013](docs/adr/0013-auth-and-quota-protection.md)). `AUTH_MODE` picks how a request is identified:
+
+| Mode | Use | Identity |
+|---|---|---|
+| `dev` (default) | Local runs. The SPA mints a token from `POST /api/dev/token` transparently. | Dev JWT `sub` |
+| `jwt` | Production behind oauth2-proxy, Cloudflare Access or similar. | Gateway JWT verified against `AUTH_JWKS_URL` |
+| `tailscale` | Production behind Tailscale. | `Tailscale-User-Login` from a trusted proxy |
+| `none` | Tests, or an explicit opt-out. | Client IP |
+
+**The dev token is not a security boundary.** Anyone who can reach the API can mint one, so production must run `jwt` or `tailscale`.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `AUTH_MODE` | `dev` | `dev`, `jwt`, `tailscale` or `none` |
+| `AUTH_DEV_SECRET` | random per process | HS256 secret for dev tokens |
+| `AUTH_JWKS_URL`, `AUTH_JWT_ISSUER`, `AUTH_JWT_AUDIENCE` | | Required for `jwt` |
+| `AUTH_TRUSTED_PROXIES` | empty | Comma-separated IPs/CIDRs allowed to assert identity (`tailscale`) or `X-Forwarded-For` (`none`) |
+| `USER_RATE_PER_MIN`, `USER_RATE_BURST` | `120`, `30` | Request token bucket per principal (429 `client-rate-limited`) |
+| `USER_UPSTREAM_BUDGET`, `USER_UPSTREAM_WINDOW_S` | `100`, `600` | GitHub calls a principal may initiate per window (429 `upstream-budget-exceeded`) |
+| `UPSTREAM_RESERVE_FRACTION` | `0.2` | Share of GitHub's limit kept for background refreshes (503 `upstream-rate-limited`) |
+| `MAX_CONCURRENT_WALKS` | `2` | Cold org walks in flight at once; the rest wait |
+| `ORG_ALLOWLIST` | empty (off) | Comma-separated orgs served; others get 403 `org-not-allowed` |
+
+Cache hits and joining someone else's in-flight walk cost no budget. With `CACHE_BACKEND=redis` the buckets live in Redis, so limits hold across replicas. Requests with `Sec-Fetch-Site: cross-site` are refused.
+
+## Progressive cold load
+
+A cold org takes 7 to 33 s to fetch completely, so the first request answers within `COLD_WAIT_MS` with a provisional response ([ADR-0012](docs/adr/0012-progressive-cold-load.md)): `snapshot.complete: false`, load progress (`pages_done`/`pages_total`), and, when one cheap upstream call can reproduce it exactly, the first page of results. The client re-requests every second (`Retry-After: 1`) until `snapshot.complete` is true. Re-requests join the single walk and reuse the cached preview, so they cost no extra GitHub calls. Provisional responses are never cacheable and have no paging. See `docs/design/api-contract.md` for the exact shape.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `COLD_WAIT_MS` | `1500` | How long a cold first-page request waits for the walk before answering provisionally (`0` = always answer provisionally) |
+| `PREVIEW_MODE` | `first` | `first`: one upstream preview per cold load per org (the query that started it); `per-query`: one per distinct query; `off`: progress only. `sort=name` asc is free in every mode (it reuses the walk's page 1) |
+| `PREWARM_ORGS` | empty | Comma-separated orgs warmed in the background at startup as the system principal (not charged to users) |
+
+Previews are charged to the initiating user's upstream budget; `stars` previews use GitHub's separate Search quota.
+
 ## Make targets
 
 `make help` prints these. Each mise task is a thin alias (`mise run <target>`).
@@ -112,6 +151,9 @@ Errors are `application/problem+json` (RFC 9457) with `type`, `title`, `status`,
 | `cursor` and `offset` together | 400 | `invalid-pagination` | |
 | Org not found | 404 | `org-not-found` | `org` |
 | GitHub rate limit, or budget guard, no stale data | 503 + `Retry-After` | `upstream-rate-limited` | `retry_after`, `rate_limit`, `pages_needed` (guard) |
+| Missing or invalid credentials | 401 + `WWW-Authenticate: Bearer` | `unauthorized` | |
+| Cross-site request, or org not on `ORG_ALLOWLIST` | 403 | `cross-site-request` / `org-not-allowed` | |
+| Request rate or upstream-call budget exceeded | 429 + `Retry-After` | `client-rate-limited` / `upstream-budget-exceeded` | `retry_after`, `pages_needed` (budget) |
 | GitHub 5xx or network failure, no stale data | 502 | `upstream-unavailable` | |
 | GitHub timeout, no stale data | 504 | `upstream-timeout` | |
 
@@ -153,7 +195,7 @@ The GitHub integration is tested without ever calling the real API:
 
 Backend tests run in parallel (`pytest -n auto` via `addopts`). The frontend suite (Vitest + MSW with typed `openapi-msw` handlers) runs concurrently with the backend from `make test`. Contract drift checks fail if `openapi.json` or the generated TS client are stale (`test_openapi_contract.py`, `pnpm gen:api:check`).
 
-Current counts from `mise exec -- make test`: **162 backend tests** (about 2s) and **14 frontend tests**, all passing.
+Current counts from `make test`: **218 backend tests** (about 3s) and **42 frontend tests**, all passing.
 
 ## What I didn't get to, and how I'd approach it
 
@@ -181,6 +223,15 @@ An AI-assisted workflow: an architect model coordinated subagents, each owning a
 
 **Time spent:** started 2026-11-17 10:29 UTC.
 Finished: 2026-11-17 10:51 UTC (about 22 minutes of wall-clock time against a 4-hour timebox; the parallel subagents did most of the implementation)
+
+**Round two** (branch `feat/progressive-first-page`, 2026-11-21, decisions R2-1 to R2-4 in `docs/decisions-log.md`):
+
+| Step | Start (UTC) | End (UTC) | Wall clock |
+|---|---|---|---|
+| Investigate cold-load latency, probe GitHub, write ADR-0012 | 09:18 | ~09:26 | ~8 min |
+| Quota and security discussion, ADR-0013 | ~09:28 | 09:36 | ~8 min |
+| ADR-0013 build: 2 Sonnet subagents in parallel (backend 5.8 min, frontend 1.3 min), then integration and a live check | 09:38 | 09:46 | 8 min |
+| ADR-0012 build: 2 Sonnet subagents in parallel (backend 6.3 min, frontend 1.8 min), then integration, the Search sizing fix and live timings | 09:48 | 10:09 | 21 min |
 
 ## Repo layout
 
