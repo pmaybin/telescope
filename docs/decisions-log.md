@@ -86,3 +86,4 @@
     2. One 404 from the mint (seen at 10:04 during a hot reload) was remembered forever as "no dev auth".
   - Fixes: a 5 s mint timeout; "no dev auth" now expires after 30 s and is cleared on any 401; two regression tests.
 - ~10:33Z: The human asked whether the architecture narrative and README reflected this session. They only partly did. A Sonnet subagent updated `docs/architecture.md` and the `/architecture` page: ADR-0012 and ADR-0013 entries, a new progressive-load sequence diagram, updated context, class, error and deployment diagrams, and the roadmap. The architect updated the README: intro, key decisions, round-two measurements, test counts, follow-ups and timings. Headless Chrome renders all 9 diagrams with no syntax errors.
+- 10:39Z: The human approved merging PR #1 into main.

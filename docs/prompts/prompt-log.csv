@@ -904,3 +904,4 @@ Changes:
 5. Gate: in frontend run pnpm lint, pnpm typecheck and pnpm test (the architecture page has tests); also `make lint` from the repo root must pass (it includes prettier). Render-check: build with `pnpm build` to ensure the .mmd imports resolve.
 Report back: what changed in each artefact, diagrams added/changed, and gate results.
 "
+2026-11-21T10:39:34Z,human,human,architect,claude-opus-5-5,high,,Merge PR #1 into main,Okay merge the pr into main
