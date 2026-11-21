@@ -68,8 +68,8 @@ export function ArchitecturePage() {
           >
             <h2 id="diagrams-title">Diagrams</h2>
             <p className="arch-lede">
-              Nine views of the system. Wide diagrams scroll sideways inside
-              their card; use full screen to zoom and pan.
+              Nine views of the system. Each diagram fits its card; click one
+              (or use full screen) to zoom and pan through the detail.
             </p>
             <div className="diagram-list">
               {diagrams.map((d) => (

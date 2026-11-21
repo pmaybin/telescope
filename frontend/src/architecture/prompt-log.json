@@ -516,6 +516,30 @@
    "bead_id": "",
    "summary": "Merge PR #1 into main",
    "prompt": "Okay merge the pr into main"
+  },
+  {
+   "n": 44,
+   "timestamp_utc": "2026-11-21T10:46:35Z",
+   "actor": "human",
+   "from": "human",
+   "to": "architect",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "bead_id": "",
+   "summary": "Architecture view: wide diagrams should fit the window; rely on expand for detail",
+   "prompt": "The only other thing would be in the achitecture view where the wide diagrams should fit in the window and rely on the expand to see details"
+  },
+  {
+   "n": 45,
+   "timestamp_utc": "2026-11-21T10:48:15Z",
+   "actor": "human",
+   "from": "human",
+   "to": "architect",
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "bead_id": "",
+   "summary": "Open a new PR for the diagram fit and merge",
+   "prompt": "open a new pr and merge"
   }
  ]
 }

@@ -369,25 +369,58 @@
   background: var(--surface);
   border-radius: 0 0 var(--radius-lg) var(--radius-lg);
 }
-.diagram-svg {
-  overflow-x: auto;
+.diagram-fit {
+  position: relative;
+  display: block;
+  width: 100%;
   padding: var(--space-5);
+  border: 0;
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: zoom-in;
 }
+.diagram-fit:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.diagram-svg {
+  display: block;
+}
+/* Every diagram scales down to the card width (never up past its natural size);
+   detail is one click away in the full-screen viewer. */
 .diagram-svg svg {
   display: block;
   margin: 0 auto;
-  height: auto;
-  max-width: none;
-}
-.diagram-body:not([data-kind='Class']):not([data-kind='Sequence'])
-  .diagram-svg
-  svg {
+  width: auto;
   max-width: 100%;
+  height: auto;
 }
-.diagram-body[data-kind='Component'] .diagram-svg svg,
-.diagram-body[data-kind='Deployment'] .diagram-svg svg {
-  /* Wide left-to-right layouts stay legible; the card scrolls sideways. */
-  min-width: 1240px;
+.diagram-fit-hint {
+  position: absolute;
+  right: var(--space-3);
+  bottom: var(--space-3);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-size: 12px;
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+.diagram-fit:hover .diagram-fit-hint,
+.diagram-fit:focus-visible .diagram-fit-hint {
+  opacity: 1;
+}
+@media (hover: none) {
+  .diagram-fit-hint {
+    opacity: 1;
+  }
 }
 .diagram-skeleton {
   display: flex;
