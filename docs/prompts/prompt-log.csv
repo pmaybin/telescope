@@ -877,3 +877,30 @@ Response 200 of GET /api/orgs/{org}/repos gains, all additive:
 - While complete=false: has_next=false, has_prev=false, next_cursor=null, prev_cursor=null; headers Cache-Control: no-store, Retry-After: 1, no ETag."
 2026-11-21T10:20:41Z,human,human,architect,claude-opus-5-5,high,,Did testing use all API credits? Then: microsoft search wouldn't load anything,did you use all my public api credits testing? | then something is breaking as i went to search microsoft and it wouldn't load anything
 2026-11-21T10:24:51Z,human,human,architect,claude-opus-5-5,high,,"Make a new branch, add the changes and push the PR","Make a new branch, add the changes and push the pr"
+2026-11-21T10:31:23Z,human,human,architect,claude-opus-5-5,high,,Were architecture narrative and README updated for this session?,did you add the updates to the achritecture narative and the readme that would reflect this session?
+2026-11-21T10:31:23Z,architect,architect,subagent,claude-sonnet-5-5,medium,,Update architecture narrative (docs + /architecture page) for round two,"Update the architecture narrative in /home/paul/.t3/projects/telescope (branch feat/round-two-quota-and-progressive-load, already pushed with PR #1; do NOT commit/push — the architect will). Never print .env. Run bd as `env -u BEADS_DIR bd ...` if needed.
+
+Two artefacts must say the same thing and must both be updated:
+- docs/architecture.md (Principles, 8 Mermaid diagrams, Decisions with ADR summaries, Production roadmap)
+- the in-app /architecture page: frontend/src/architecture/content.ts (diagrams list, decisions[], roadmap[], overview) and frontend/src/architecture/diagrams/*.mmd (the .mmd files are the diagram sources the page renders; architecture.md embeds the same Mermaid).
+Match the existing tone, structure and field shapes (read the Decision/RoadmapArea/DiagramEntry interfaces in content.ts). Keep Mermaid syntax valid for the version used (check package.json; the page lazy-loads mermaid; look at how existing .mmd files are written and imported).
+
+Source material for round two (read these; do not invent facts):
+- docs/adr/0012-progressive-cold-load.md, docs/adr/0013-auth-and-quota-protection.md
+- docs/research/cold-load-first-page.md (measurements)
+- docs/decisions-log.md, the ""Round two"" section (decisions R2-1..R2-4, integration notes, live measurements)
+- code: backend/src/telescope/{auth/,ratelimit/,preview.py,api/security.py,cache/service.py}, frontend/src/api/auth.ts, frontend/src/components/LoadingBanner.tsx
+
+Changes:
+1. Principles/overview: the scarce resource is GitHub quota, so it is budgeted per user (ADR-0013), and cold loads paint a provisional exact first page with progress instead of blocking (ADR-0012). Keep the existing cold-fetch numbers paragraph but add the round-two first-paint numbers (google stars 2.8 s first paint vs 6.5 s complete, etc. from decisions-log).
+2. Diagrams:
+   - Context/components: add the auth/identity layer (dev token minting, gateway JWT/Tailscale in prod), the rate limiter and the UpstreamGovernor between the route and the GitHub client, and the PreviewService, with Search API as an upstream.
+   - Classes: add Principal, Authenticator, RateLimiter (InMemory/Redis), UpstreamGovernor, Flight/LoadProgress, PreviewService, plus the new SnapshotInfo/PageInfo fields (complete, progress, provisional_reason).
+   - Cold request sequence: replace the blocking story with the progressive one, or add a new diagram ""Progressive cold load (Sequence)"": request → auth + buckets → cold miss starts the walk (charged to the initiator) → wait COLD_WAIT_MS → provisional response with preview + progress (no-store, Retry-After) → client polls (free, joins the flight) → snapshot lands → complete response. If you add a diagram, add a new .mmd file and an entry in content.ts.
+   - Error mapping: add 401 unauthorized, 403 cross-site-request / org-not-allowed, 429 client-rate-limited / upstream-budget-exceeded, the 503 reserve refusal, and ""over budget with an expired snapshot → 200 stale"".
+   - Deployment diagrams: prod shows the gateway (oauth2-proxy / Tailscale) issuing identity, and Redis holding the limiter buckets.
+3. Decisions: add ADR-0012 and ADR-0013 entries in the same format as the others (decision, why, alternatives considered, consequences, revisit-when — whatever fields exist), including the notable choices: lazy preview (rejected eager start to save quota), per_page=limit for Search, one preview per cold load, CSRF not applicable to a bearer read-only API, the cross-site guard, and serving stale to over-budget users.
+4. Roadmap: update the areas that changed — Security (auth now exists; next steps: an SSO gateway in prod, token rotation, audit logs), Topology/scaling (progress and previews are per-process; Redis-shared progress and SSE are follow-ups tel-aw3), Data freshness (PREWARM_ORGS exists), GitHub access (eager preview opt-in tel-625, Search for filtered updated previews tel-1w6). Remove items that are now done.
+5. Gate: in frontend run pnpm lint, pnpm typecheck and pnpm test (the architecture page has tests); also `make lint` from the repo root must pass (it includes prettier). Render-check: build with `pnpm build` to ensure the .mmd imports resolve.
+Report back: what changed in each artefact, diagrams added/changed, and gate results.
+"

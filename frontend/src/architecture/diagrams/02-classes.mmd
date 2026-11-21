@@ -47,17 +47,24 @@ classDiagram
     }
     class PageInfo {
         limit: int
-        total: int
+        total: int?
         has_next: bool
         has_prev: bool
         next_cursor: str?
         prev_cursor: str?
         offset: int?
+        provisional_reason: ProvisionalReason?
+    }
+    class ProgressInfo {
+        pages_done: int
+        pages_total: int?
     }
     class SnapshotInfo {
-        id: str
-        fetched_at: datetime
-        repo_count: int
+        id: str?
+        fetched_at: datetime?
+        repo_count: int?
+        complete: bool
+        progress: ProgressInfo?
         stale: bool
         cursor_from_older_snapshot: bool
     }
@@ -66,6 +73,13 @@ classDiagram
         limit: int?
         remaining: int?
         reset_at: datetime?
+    }
+    class ProvisionalReason {
+        <<enumeration>>
+        preview-disabled
+        preview-skipped
+        preview-inexact
+        preview-unavailable
     }
     class RepoPage {
         org: str
@@ -120,6 +134,45 @@ classDiagram
         get(org) CachedSnapshot
         aclose()
     }
+    class Flight {
+        key: str
+        task: Task
+        initiator: Principal?
+        starter_hash: str?
+        previews: dict
+    }
+    class LoadProgress {
+        pages_done: int
+        pages_total: int?
+        first_page: Repo[]?
+    }
+    class PreviewService {
+        provisional(org, query, flight) Provisional
+    }
+    class Principal {
+        <<frozen>>
+        sub: str
+        source: jwt|dev|tailscale|ip|system
+        key() str
+    }
+    class Authenticator {
+        mode: dev|jwt|tailscale|none
+        authenticate(request) Principal
+        mint_dev_token(sub) str
+    }
+    class RateLimiter {
+        <<interface>>
+        take(key, cost, rate, burst) Decision
+    }
+    class InMemoryRateLimiter
+    class RedisRateLimiter {
+        key_prefix: str
+    }
+    class UpstreamGovernor {
+        budget: int
+        reserve_fraction: float
+        charge(cost, state, pages_needed)
+    }
     class CachedSnapshot {
         <<frozen>>
         snapshot: Snapshot
@@ -161,11 +214,22 @@ classDiagram
     }
     class UpstreamUnavailable
     class UpstreamTimeout
+    class ClientRejection {
+        reason: str
+        retry_after: int?
+    }
+    class Unauthorized
+    class CrossSiteRequest
+    class OrgNotAllowed
+    class ClientRateLimited
+    class UpstreamBudgetExceeded
 
     RepoQuery --> RepoType
     RepoQuery --> SortField
     RepoQuery --> SortOrder
     Repo --> License
+    SnapshotInfo --> ProgressInfo
+    PageInfo --> ProvisionalReason
     RepoPage *-- Repo
     RepoPage *-- PageInfo
     RepoPage *-- SnapshotInfo
@@ -177,6 +241,18 @@ classDiagram
     SnapshotService o-- SnapshotStore
     SnapshotService ..> GitHubClient : Fetcher
     SnapshotService ..> CachedSnapshot
+    SnapshotService o-- Flight
+    Flight *-- LoadProgress
+    Flight --> Principal : initiator
+    GitHubClient ..> LoadProgress : reports into
+    GitHubClient ..> UpstreamGovernor : charge before spend
+    PreviewService ..> Flight : one preview per load
+    PreviewService ..> UpstreamGovernor : charged to initiator
+    Authenticator ..> Principal : yields
+    RateLimiter <|.. InMemoryRateLimiter
+    RateLimiter <|.. RedisRateLimiter
+    UpstreamGovernor o-- RateLimiter
+    UpstreamGovernor ..> Principal : spender
     CachedSnapshot --> Snapshot
     GitHubClient --> RateLimitState
     GitHubClient ..> Snapshot : builds
@@ -192,4 +268,10 @@ classDiagram
     UpstreamError <|-- UpstreamRateLimited
     UpstreamError <|-- UpstreamUnavailable
     UpstreamError <|-- UpstreamTimeout
+    TelescopeError <|-- ClientRejection
+    ClientRejection <|-- Unauthorized
+    ClientRejection <|-- CrossSiteRequest
+    ClientRejection <|-- OrgNotAllowed
+    ClientRejection <|-- ClientRateLimited
+    ClientRejection <|-- UpstreamBudgetExceeded
     TelescopeError ..> Problem : mapped to

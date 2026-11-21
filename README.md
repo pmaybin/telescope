@@ -2,7 +2,7 @@
 
 # Telescope
 
-Telescope is a small internal-tool-style explorer for a GitHub organisation's public repositories. A FastAPI backend (`GET /api/orgs/{org}/repos`) fetches an org's repos from the GitHub REST API once, caches them as an immutable snapshot, and serves filtered, sorted and paginated pages from memory. A React + TypeScript UI sits on top, and OpenTelemetry feeds a provisioned Grafana dashboard. It was built as a timeboxed take-home and is meant to be cloned and run locally.
+Telescope is a small internal-tool-style explorer for a GitHub organisation's public repositories. A FastAPI backend (`GET /api/orgs/{org}/repos`) fetches an org's repos from the GitHub REST API once, caches them as an immutable snapshot, and serves filtered, sorted and paginated pages from memory. Cold orgs paint an exact provisional first page with a progress bar while the full fetch runs, and every user's GitHub spend is budgeted so no one client can drain the shared quota. A React + TypeScript UI sits on top, and OpenTelemetry feeds a provisioned Grafana dashboard. It was built as a timeboxed take-home and is meant to be cloned and run locally.
 
 System design, diagrams and decisions: [docs/architecture.md](docs/architecture.md), also shown in the app at `/architecture`.
 
@@ -173,6 +173,8 @@ All ADRs live in [docs/adr](docs/adr/README.md); the human Q&A is in [docs/decis
 - **Errors** ([0006](docs/adr/0006-error-handling.md), [0007](docs/adr/0007-rate-limits-and-tokens.md)). problem+json throughout. The upstream limit is **503 with `Retry-After`, not 429**: the client did nothing wrong, our dependency is limited. The budget guard fails fast before burning quota.
 - **Bounded concurrent page fetch (8)** ([0002](docs/adr/0002-github-data-acquisition.md)). This deliberately deviates from GitHub's "make requests serially" guidance because a cold 85-page org is otherwise unusable. Concurrency is capped, retries are jittered, and the default was raised from 4 to 8 after measuring real page latency (`GITHUB_PAGE_CONCURRENCY`).
 - **Observability** ([0009](docs/adr/0009-observability.md)). OpenTelemetry traces, metrics and logs flow to the `grafana/otel-lgtm` container; JSON logs carry request and trace ids; a metrics facade keeps OTel out of business code; the dashboard is provisioned.
+- **Progressive cold load** ([0012](docs/adr/0012-progressive-cold-load.md)). A cold first-page request waits at most 1.5 s, then returns `snapshot.complete: false` with progress, plus an exact first page when a single upstream call can prove one: the walk's own page 1 for `name` asc (free), a list sort for `updated`/`pushed`, or Search for `stars`. There is one preview per cold load, so a cold org costs at most N + 1 calls. The preview starts only after the wait, not eagerly: eager would paint about 1 s sooner but spends a call even for orgs that finish inside the wait.
+- **Identity and quota protection** ([0013](docs/adr/0013-auth-and-quota-protection.md)). Limits are on **upstream spend per user**, not only request rate, because one client looping over random org names is what drains the quota. Identity comes from a dev-minted JWT locally and from the gateway (JWT or Tailscale) in production. CSRF tokens aren't needed for a read-only bearer API, but a `Sec-Fetch-Site` guard stops other sites making a visitor's browser burn quota.
 - Also: [0001](docs/adr/0001-architecture-repo-layout-and-tooling.md) tooling, [0008](docs/adr/0008-secrets.md) secrets, [0010](docs/adr/0010-api-contract-and-client-codegen.md) contract and codegen, [0011](docs/adr/0011-test-strategy-and-parallelism.md) tests.
 
 ## Measured results
@@ -185,6 +187,18 @@ From the architect's end-to-end run on 2026-11-17:
 - No token string appeared in the container logs.
 - The Grafana dashboard shows HTTP RED metrics, cache, GitHub calls, rate limit, logs and traces.
 
+Round two, 2026-11-21, with the token, measured from a cold restart:
+
+| Org and query | First paint | Complete |
+|---|---|---|
+| `google`, stars | **2.8 s** (exact top 30, total 2,947) | 6.5 s (blank until then before) |
+| `kubernetes-sigs`, name (free preview) | 1.5 s | 2.6 s |
+| `microsoft`, updated + `python` | 2.7 s, then a progress bar to 85/85 pages (preview correctly inexact) | 15.7 s |
+
+- The Search preview with `per_page=100` took 2.9 s; sizing it to `limit` brought it to about 1 s.
+- Quota protection: no token gave 401 and a cross-site request gave 403. A user who had spent 91 calls was refused the next cold org with `429 upstream-budget-exceeded`, while another user was still served.
+- The whole round of testing used 318 of 5,000 core calls.
+
 ## Testing
 
 The GitHub integration is tested without ever calling the real API:
@@ -195,13 +209,13 @@ The GitHub integration is tested without ever calling the real API:
 
 Backend tests run in parallel (`pytest -n auto` via `addopts`). The frontend suite (Vitest + MSW with typed `openapi-msw` handlers) runs concurrently with the backend from `make test`. Contract drift checks fail if `openapi.json` or the generated TS client are stale (`test_openapi_contract.py`, `pnpm gen:api:check`).
 
-Current counts from `make test`: **218 backend tests** (about 3s) and **42 frontend tests**, all passing.
+Current counts from `make test`: **253 backend tests** (about 3s) and **48 frontend tests**, all passing.
 
 ## What I didn't get to, and how I'd approach it
 
 - **Schemathesis** property tests against `openapi.json`.
 - **Cross-replica single-flight** (a Redis lock) and **refresh-ahead / warm-up** for popular orgs. Today single-flight is per process.
-- **Progressive first load for huge orgs:** stream page 1 early, or return `202` plus polling.
+- **Progressive load follow-ups:** an opt-in eager preview (`tel-625`), exact filtered `updated` previews via Search (`tel-1w6`), and progress shared across replicas through Redis, optionally pushed over SSE (`tel-aw3`).
 - **GitHub App auth** for higher rate limits.
 - **Webhook-driven invalidation** instead of TTL only.
 - **Alert rules**, for example rate-limit remaining under 10%.
@@ -210,7 +224,7 @@ Current counts from `make test`: **218 backend tests** (about 3s) and **42 front
 - **CI.** Not wanted for this local evaluation; `make lint test` is the gate.
 - **`page`/`per_page` mode.** Cut by decision because it adds little over offset.
 - **Multi-value language filters.**
-- **Auth for the internal tool** (an SSO proxy in front).
+- **A real SSO gateway in front** (oauth2-proxy or Tailscale) for production. The app side (`AUTH_MODE=jwt|tailscale`) is done; the dev token is not a security boundary.
 
 ## How this was built
 
@@ -224,7 +238,7 @@ An AI-assisted workflow: an architect model coordinated subagents, each owning a
 **Time spent:** started 2026-11-17 10:29 UTC.
 Finished: 2026-11-17 10:51 UTC (about 22 minutes of wall-clock time against a 4-hour timebox; the parallel subagents did most of the implementation)
 
-**Round two** (branch `feat/progressive-first-page`, 2026-11-21, decisions R2-1 to R2-4 in `docs/decisions-log.md`):
+**Round two** (branch `feat/round-two-quota-and-progressive-load`, [PR #1](https://github.com/pmaybin/telescope/pull/1), 2026-11-21, decisions R2-1 to R2-4 in `docs/decisions-log.md`):
 
 | Step | Start (UTC) | End (UTC) | Wall clock |
 |---|---|---|---|
@@ -232,6 +246,9 @@ Finished: 2026-11-17 10:51 UTC (about 22 minutes of wall-clock time against a 4-
 | Quota and security discussion, ADR-0013 | ~09:28 | 09:36 | ~8 min |
 | ADR-0013 build: 2 Sonnet subagents in parallel (backend 5.8 min, frontend 1.3 min), then integration and a live check | 09:38 | 09:46 | 8 min |
 | ADR-0012 build: 2 Sonnet subagents in parallel (backend 6.3 min, frontend 1.8 min), then integration, the Search sizing fix and live timings | 09:48 | 10:09 | 21 min |
+| Quota check (318 of 5,000 core calls used) and fix for a stuck tab (dev-token mint timeout, self-healing 404) | 10:12 | 10:20 | 8 min |
+| Commit, push and open PR #1 | ~10:22 | ~10:25 | ~3 min |
+| Architecture narrative and README brought up to date (1 Sonnet subagent for `docs/architecture.md` and the `/architecture` page) | ~10:27 | ~10:33 | ~6 min |
 
 ## Repo layout
 
@@ -241,7 +258,7 @@ Finished: 2026-11-17 10:51 UTC (about 22 minutes of wall-clock time against a 4-
 ├── frontend/   React + Vite UI (src), nginx Dockerfile
 ├── infra/      docker-compose.yml, Grafana dashboard and provisioning
 ├── docs/       adr/, design/api-contract.md, research/, prompts/, decisions-log.md
-├── scripts/    log_prompt.py (prompt log helper)
+├── scripts/    log_prompt.py (prompt log helper), spikes/ (live GitHub probes)
 ├── assets/     icon
 ├── .beads/     issue tracking
 ├── openapi.json  committed API contract (source for the TS client)

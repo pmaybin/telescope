@@ -1,0 +1,41 @@
+sequenceDiagram
+    autonumber
+    actor B as Browser
+    participant N as nginx
+    participant R as Route and guards
+    participant L as RateLimiter
+    participant S as SnapshotService
+    participant P as PreviewService
+    participant G as GitHubClient with UpstreamGovernor
+    participant H as GitHub API
+
+    B->>N: GET /api/orgs/google/repos?sort=stars, Authorization Bearer
+    N->>R: proxy
+    R->>R: cross-site guard, authenticate to Principal
+    R->>L: take request bucket (120 per min, burst 30)
+    L-->>R: allowed
+    R->>S: get("google")
+    Note over S: cold miss: start the walk as a Flight, charged to the initiator
+    S->>G: fetch_org_repos, reporting into LoadProgress
+    G->>H: page 1 (charged first), then pages 2..N charged atomically
+    Note over R,S: wait up to COLD_WAIT_MS (1.5 s) for the snapshot
+    S-->>R: Loading(flight), snapshot not ready
+    R->>P: provisional(org, query, flight)
+    Note over P: lazy: starts only now, one preview per cold load, charged to the initiator
+    P->>H: Search q=org:google, sort=stars, per_page=limit
+    H-->>P: top 30 and total_count
+    P-->>R: exact first page, or provisional_reason
+    R-->>B: 200 complete=false, items, progress pages_done of pages_total, Cache-Control no-store, Retry-After 1
+    loop every 1 s until complete
+        B->>R: same URL (counts one request, costs no upstream call)
+        R->>S: get("google")
+        S-->>R: Loading(flight), joins the walk, preview cached for the flight
+        R-->>B: 200 complete=false, updated progress
+    end
+    G-->>S: Snapshot, content-hash id
+    S->>S: store snapshot, drop the flight
+    B->>R: next poll
+    R->>S: get("google")
+    S-->>R: CachedSnapshot
+    R-->>B: 200 complete=true, snapshot id, cursors, ETag
+    Note over B: rows swap in place, banner fades out

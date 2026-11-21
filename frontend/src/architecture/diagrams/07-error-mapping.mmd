@@ -1,4 +1,21 @@
 flowchart TD
+    req["Incoming request"] --> xs{"Sec-Fetch-Site is cross-site?"}
+    xs -->|"yes"| p403x["403 cross-site-request"]
+    xs -->|"no"| au{"valid credentials for AUTH_MODE?"}
+    au -->|"no"| p401["401 unauthorized, WWW-Authenticate Bearer"]
+    au -->|"yes"| rl{"request bucket has a token?"}
+    rl -->|"no"| p429a["429 client-rate-limited with Retry-After"]
+    rl -->|"yes"| al{"org on ORG_ALLOWLIST, or list empty?"}
+    al -->|"no"| p403o["403 org-not-allowed"]
+    al -->|"yes"| need{"upstream spend needed?"}
+    need -->|"no: cache hit or joined flight"| okc["200 from cache, 0 calls charged"]
+    need -->|"yes"| gv{"UpstreamGovernor: reserve, then per-user budget"}
+    gv -->|"would cut GitHub remaining below the 20% reserve"| uerr
+    gv -->|"user budget exhausted"| ob{"expired snapshot under 24h old?"}
+    ob -->|"yes"| ok200s["200 with snapshot.stale=true"]
+    ob -->|"no"| p429b["429 upstream-budget-exceeded with Retry-After"]
+    gv -->|"allowed"| resp
+
     resp["GitHub response or failure for one page"]
     resp --> ok{"status"}
     ok -->|"2xx or 304"| good["Page accepted, rate limit state updated"]
@@ -37,6 +54,6 @@ flowchart TD
     uerr --> st{"stale snapshot available and age below 24h?"}
     st -->|"yes"| ok200["200 with snapshot.stale=true"]
     st -->|"no"| map{"error type"}
-    map -->|"UpstreamRateLimited"| p503["503 upstream-rate-limited with Retry-After"]
+    map -->|"UpstreamRateLimited, including the reserve refusal"| p503["503 upstream-rate-limited with Retry-After"]
     map -->|"UpstreamUnavailable"| p502["502 upstream-unavailable"]
     map -->|"UpstreamTimeout"| p504["504 upstream-timeout"]

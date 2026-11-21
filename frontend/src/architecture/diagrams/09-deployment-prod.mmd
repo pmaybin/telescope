@@ -1,6 +1,6 @@
 flowchart LR
     users(["Users"])
-    sso["SSO / OIDC proxy"]
+    sso["Gateway: oauth2-proxy or Tailscale, issues identity"]
     cdn["CDN: static SPA"]
     alb["ALB: TLS, WAF"]
 
@@ -14,7 +14,7 @@ flowchart LR
         hook["Webhook receiver"]
     end
 
-    redis[("ElastiCache Redis: shared snapshots, distributed single-flight lock")]
+    redis[("ElastiCache Redis: shared snapshots, distributed single-flight lock, rate limiter and upstream-budget buckets")]
     pg[("Postgres: snapshot history, optional")]
     sm["AWS Secrets Manager: GitHub App keys"]
     gh[("GitHub REST API plus webhooks")]
@@ -28,10 +28,12 @@ flowchart LR
     users --> sso
     sso --> cdn
     sso --> alb
-    alb --> a1
+    a1 -.->|"fetch JWKS, AUTH_JWKS_URL"| sso
+    alb -->|"gateway JWT or Tailscale-User-Login, trusted proxies only"| a1
     alb --> a2
-    a1 --> redis
-    a2 --> redis
+    a2 -.->|"fetch JWKS"| sso
+    a1 -->|"snapshots, limiter buckets"| redis
+    a2 -->|"snapshots, limiter buckets"| redis
     sched -->|"enqueue refresh"| worker
     worker --> redis
     worker -->|"installation tokens, REST"| gh

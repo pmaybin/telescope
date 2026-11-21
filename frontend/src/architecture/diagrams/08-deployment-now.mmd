@@ -8,7 +8,7 @@ flowchart LR
             nginx["nginx: SPA plus proxy /api/ to api:8000"]
         end
         subgraph api["api, built from backend"]
-            uv["uvicorn plus FastAPI on 8000"]
+            uv["uvicorn plus FastAPI on 8000: in-memory rate limiter buckets"]
         end
         subgraph lgtm["lgtm, grafana/otel-lgtm 0.41.0"]
             graf["Grafana 3000, provisioned dashboard"]
@@ -23,13 +23,14 @@ flowchart LR
 
     envfile -->|"GITHUB_TOKEN, optional, empty means tokenless"| uv
     envfile -->|"CACHE_BACKEND, CACHE_TTL_SECONDS, LOG_LEVEL"| uv
+    envfile -->|"AUTH_MODE=dev, optional AUTH_DEV_SECRET, quota and PREWARM_ORGS settings"| uv
 
     dev -->|"localhost 8080"| nginx
     dev -->|"localhost 8000 direct API"| uv
     dev -->|"localhost 3000"| graf
-    nginx -->|"HTTP"| uv
+    nginx -->|"HTTP: /api/dev/token mints a 1h dev JWT, Bearer on every call"| uv
     uv -->|"HTTPS"| gh
     uv -->|"OTLP/HTTP lgtm:4318"| otlp
-    uv -.->|"CACHE_BACKEND=redis, REDIS_URL redis:6379"| rds
+    uv -.->|"CACHE_BACKEND=redis, REDIS_URL redis:6379: snapshots and limiter buckets"| rds
     web -.->|"depends_on"| api
     api -.->|"depends_on service_healthy"| lgtm
