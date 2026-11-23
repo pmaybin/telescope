@@ -540,6 +540,18 @@
    "bead_id": "",
    "summary": "Open a new PR for the diagram fit and merge",
    "prompt": "open a new pr and merge"
+  },
+  {
+   "n": 46,
+   "timestamp_utc": "2026-11-23T22:23:45Z",
+   "actor": "human",
+   "from": "human",
+   "to": "architect",
+   "model": "claude-opus-5-5",
+   "effort": "medium",
+   "bead_id": "tel-rhq",
+   "summary": "Put up a PR for the quota guard lock-out fix; do not merge",
+   "prompt": "okay, thanks, put the pr up but don't merge it,"
   }
  ]
 }

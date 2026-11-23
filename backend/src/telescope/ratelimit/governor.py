@@ -53,8 +53,12 @@ class UpstreamGovernor:
             return
 
         # Reserve first: a refusal here must not consume the user's budget.
+        # A count from a window that has ended says nothing about the current one. Refused calls
+        # never reach GitHub, so trusting it would refuse forever; let one call re-learn it.
+        window_ended = state.reset_at is not None and state.reset_at <= self._now()
         if (
-            state.remaining is not None
+            not window_ended
+            and state.remaining is not None
             and state.limit
             and state.remaining - cost < self._reserve_fraction * state.limit
         ):

@@ -322,7 +322,7 @@ export const decisions: Decision[] = [
     adr: '0011',
     title: 'Fast, offline, parallel-safe tests',
     decision:
-      'pytest with -n auto, respx at the transport level with a fixture builder that produces real Link and rate-limit headers, and injected now, sleep and rng so TTL, SWR and backoff are instant and deterministic. The query engine is tested with pure table-driven and seeded property-style walks. The frontend uses Vitest with MSW handlers typed from the same paths type. The suite is 253 backend and 48 frontend tests.',
+      'pytest with -n auto, respx at the transport level with a fixture builder that produces real Link and rate-limit headers, and injected now, sleep and rng so TTL, SWR and backoff are instant and deterministic. The query engine is tested with pure table-driven and seeded property-style walks. The frontend uses Vitest with MSW handlers typed from the same paths type. The suite is 255 backend and 48 frontend tests.',
     why: 'Tests must not depend on the network or on 60 requests an hour, and must not share state because agents work in parallel.',
     alternatives: [
       'The real GitHub API in tests: slow, flaky and burns quota.',
@@ -463,7 +463,7 @@ export const roadmap: RoadmapArea[] = [
   },
   {
     area: 'Delivery',
-    now: 'No CI by decision. make lint and make test run formatters, type checks, 253 backend and 48 frontend tests and both contract drift checks.',
+    now: 'No CI by decision. make lint and make test run formatters, type checks, 255 backend and 48 frontend tests and both contract drift checks.',
     next: [
       'CI pipeline: lint, tests, contract drift, Schemathesis against the ASGI app, Playwright end-to-end against compose, image build and vulnerability scan.',
       'Preview environments per pull request.',
