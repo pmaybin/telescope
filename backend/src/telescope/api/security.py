@@ -4,11 +4,25 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import Depends, Request
+from fastapi import Depends, Request, Security
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from telescope.api.deps import ServicesDep
 from telescope.auth import Principal, current_principal
 from telescope.errors import ClientRateLimited, CrossSiteRequest, OrgNotAllowed
+
+# Documents the scheme in OpenAPI (and gives Swagger its Authorize button). `auto_error=False`:
+# it never rejects, because whether a bearer is required depends on AUTH_MODE. The
+# authenticator below is the only enforcement point.
+bearer_scheme = HTTPBearer(
+    scheme_name="BearerAuth",
+    bearerFormat="JWT",
+    description=(
+        "Required when `AUTH_MODE` is `dev` (mint one with `POST /api/dev/token`) or `jwt`. "
+        "Not used by `tailscale` or `none`."
+    ),
+    auto_error=False,
+)
 
 
 async def cross_site_guard(request: Request) -> None:
@@ -17,7 +31,11 @@ async def cross_site_guard(request: Request) -> None:
         raise CrossSiteRequest("Cross-site requests to this API are not allowed.")
 
 
-async def authenticated_principal(request: Request, services: ServicesDep) -> Principal:
+async def authenticated_principal(
+    request: Request,
+    services: ServicesDep,
+    _credentials: Annotated[HTTPAuthorizationCredentials | None, Security(bearer_scheme)],
+) -> Principal:
     principal = await services.authenticator.authenticate(request)
     # The scope entry feeds the access log and rejection logs; the contextvar feeds the
     # upstream governor (async dependencies run in the endpoint's own task context).

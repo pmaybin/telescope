@@ -125,9 +125,15 @@ Previews are charged to the initiating user's upstream budget; `stars` previews 
 | `cursor` | opaque string | | From `page.next_cursor` / `page.prev_cursor` |
 | `offset` | int 0-100000 | | Offset mode; mutually exclusive with `cursor` |
 
+The default `AUTH_MODE=dev` needs a bearer token (valid for 1 hour; mint a new one if the API restarts):
+
 ```sh
-curl 'http://localhost:8000/api/orgs/google/repos?language=Go&min_stars=1000&sort=stars&limit=2'
+TOKEN=$(curl -s -X POST http://localhost:8000/api/dev/token | jq -r .access_token)
+curl -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8000/api/orgs/google/repos?language=Go&min_stars=1000&sort=stars&limit=2'
 ```
+
+In Swagger (`/docs`), run `POST /api/dev/token`, click **Authorize** and paste the `access_token`. With `AUTH_MODE=none`, no token is needed.
 
 ```jsonc
 {
@@ -209,7 +215,7 @@ The GitHub integration is tested without ever calling the real API:
 
 Backend tests run in parallel (`pytest -n auto` via `addopts`). The frontend suite (Vitest + MSW with typed `openapi-msw` handlers) runs concurrently with the backend from `make test`. Contract drift checks fail if `openapi.json` or the generated TS client are stale (`test_openapi_contract.py`, `pnpm gen:api:check`).
 
-Current counts from `make test`: **253 backend tests** (about 3s) and **48 frontend tests**, all passing.
+Current counts from `make test`: **255 backend tests** (about 3s) and **48 frontend tests**, all passing.
 
 ## What I didn't get to, and how I'd approach it
 

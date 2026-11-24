@@ -91,6 +91,8 @@ Every `/api/*` request resolves to a principal; `/healthz`, `/docs` and `/openap
 
 `POST /api/dev/token` (optional body `{"sub": "<1-64 chars>"}`, default `dev-user`) returns `{access_token, token_type: "Bearer", expires_in}`. It answers `404` in every mode but `dev`. A dev token is not a security boundary.
 
+The OpenAPI spec declares the bearer scheme (`BearerAuth`) on `GET /api/orgs/{org}/repos`, so Swagger shows **Authorize**. The scheme is documentation only: whether a bearer is required depends on `AUTH_MODE`, and the authenticator enforces it.
+
 Per-principal limits: `USER_RATE_PER_MIN` (burst `USER_RATE_BURST`) on requests, `USER_UPSTREAM_BUDGET` GitHub calls per `USER_UPSTREAM_WINDOW_S`, and a global reserve (`UPSTREAM_RESERVE_FRACTION` of GitHub's limit) that only background refreshes may spend. Cache hits and joining another caller's in-flight walk cost nothing.
 
 ## Errors: `application/problem+json` (RFC 9457, see ADR-0006)
