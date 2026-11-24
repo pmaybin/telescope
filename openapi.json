@@ -627,6 +627,14 @@
         "title": "ValidationError",
         "type": "object"
       }
+    },
+    "securitySchemes": {
+      "BearerAuth": {
+        "bearerFormat": "JWT",
+        "description": "Required when `AUTH_MODE` is `dev` (mint one with `POST /api/dev/token`) or `jwt`. Not used by `tailscale` or `none`.",
+        "scheme": "bearer",
+        "type": "http"
+      }
     }
   },
   "info": {
@@ -1003,6 +1011,11 @@
             "description": "GitHub timed out and no cached data"
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "List an organisation's public repositories"
       }
     }

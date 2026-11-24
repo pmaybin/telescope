@@ -907,3 +907,4 @@ Report back: what changed in each artefact, diagrams added/changed, and gate res
 2026-11-21T10:39:34Z,human,human,architect,claude-opus-5-5,high,,Merge PR #1 into main,Okay merge the pr into main
 2026-11-21T10:46:35Z,human,human,architect,claude-opus-5-5,high,,Architecture view: wide diagrams should fit the window; rely on expand for detail,The only other thing would be in the achitecture view where the wide diagrams should fit in the window and rely on the expand to see details
 2026-11-21T10:48:15Z,human,human,architect,claude-opus-5-5,high,,Open a new PR for the diagram fit and merge,open a new pr and merge
+2026-11-24T09:50:37Z,human,human,architect,claude-opus-5-5,low,tel-1hv,Fix the missing Swagger bearer auth in a PR,Id rather you fix it in a pr
