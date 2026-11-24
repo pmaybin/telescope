@@ -552,6 +552,30 @@
    "bead_id": "tel-rhq",
    "summary": "Put up a PR for the quota guard lock-out fix; do not merge",
    "prompt": "okay, thanks, put the pr up but don't merge it,"
+  },
+  {
+   "n": 47,
+   "timestamp_utc": "2026-11-24T09:50:37Z",
+   "actor": "human",
+   "from": "human",
+   "to": "architect",
+   "model": "claude-opus-5-5",
+   "effort": "low",
+   "bead_id": "tel-1hv",
+   "summary": "Fix the missing Swagger bearer auth in a PR",
+   "prompt": "Id rather you fix it in a pr"
+  },
+  {
+   "n": 48,
+   "timestamp_utc": "2026-11-24T09:57:06Z",
+   "actor": "human",
+   "from": "human",
+   "to": "architect",
+   "model": "claude-opus-5-5",
+   "effort": "low",
+   "bead_id": "tel-rhq",
+   "summary": "Resolve PR #3's conflicts with main; do not merge",
+   "prompt": "fix pr3, but don't merge"
   }
  ]
 }

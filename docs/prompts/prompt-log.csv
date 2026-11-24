@@ -908,3 +908,5 @@ Report back: what changed in each artefact, diagrams added/changed, and gate res
 2026-11-21T10:46:35Z,human,human,architect,claude-opus-5-5,high,,Architecture view: wide diagrams should fit the window; rely on expand for detail,The only other thing would be in the achitecture view where the wide diagrams should fit in the window and rely on the expand to see details
 2026-11-21T10:48:15Z,human,human,architect,claude-opus-5-5,high,,Open a new PR for the diagram fit and merge,open a new pr and merge
 2026-11-23T22:23:45Z,human,human,architect,claude-opus-5-5,medium,tel-rhq,Put up a PR for the quota guard lock-out fix; do not merge,"okay, thanks, put the pr up but don't merge it,"
+2026-11-24T09:50:37Z,human,human,architect,claude-opus-5-5,low,tel-1hv,Fix the missing Swagger bearer auth in a PR,Id rather you fix it in a pr
+2026-11-24T09:57:06Z,human,human,architect,claude-opus-5-5,low,tel-rhq,Resolve PR #3's conflicts with main; do not merge,"fix pr3, but don't merge"
