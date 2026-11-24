@@ -984,7 +984,7 @@ flowchart LR
 
 ### ADR-0011: Fast, offline, parallel-safe tests
 
-**Decision.** pytest with -n auto, respx at the transport level with a fixture builder that produces real Link and rate-limit headers, and injected now, sleep and rng so TTL, SWR and backoff are instant and deterministic. The query engine is tested with pure table-driven and seeded property-style walks. The frontend uses Vitest with MSW handlers typed from the same paths type. The suite is 253 backend and 48 frontend tests.
+**Decision.** pytest with -n auto, respx at the transport level with a fixture builder that produces real Link and rate-limit headers, and injected now, sleep and rng so TTL, SWR and backoff are instant and deterministic. The query engine is tested with pure table-driven and seeded property-style walks. The frontend uses Vitest with MSW handlers typed from the same paths type. The suite is 257 backend and 48 frontend tests.
 
 **Why.** Tests must not depend on the network or on 60 requests an hour, and must not share state because agents work in parallel.
 
@@ -1142,7 +1142,7 @@ flowchart LR
 
 ### Delivery
 
-**Now.** No CI by decision. make lint and make test run formatters, type checks, 253 backend and 48 frontend tests and both contract drift checks.
+**Now.** No CI by decision. make lint and make test run formatters, type checks, 257 backend and 48 frontend tests and both contract drift checks.
 
 **Next**
 

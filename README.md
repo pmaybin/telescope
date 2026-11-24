@@ -215,7 +215,7 @@ The GitHub integration is tested without ever calling the real API:
 
 Backend tests run in parallel (`pytest -n auto` via `addopts`). The frontend suite (Vitest + MSW with typed `openapi-msw` handlers) runs concurrently with the backend from `make test`. Contract drift checks fail if `openapi.json` or the generated TS client are stale (`test_openapi_contract.py`, `pnpm gen:api:check`).
 
-Current counts from `make test`: **255 backend tests** (about 3s) and **48 frontend tests**, all passing.
+Current counts from `make test`: **257 backend tests** (about 3s) and **48 frontend tests**, all passing.
 
 ## What I didn't get to, and how I'd approach it
 

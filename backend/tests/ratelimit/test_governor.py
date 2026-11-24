@@ -197,3 +197,59 @@ async def test_reserve_blocks_a_fan_out_that_would_dip_into_it(
     assert r.json()["pages_needed"] == 5
     assert routes[1].call_count == 1
     assert sum(routes[n].call_count for n in range(2, 6)) == 0
+
+
+async def test_reserve_refusal_lifts_once_the_github_window_resets(
+    app_factory: AppFactory, mock: respx.MockRouter, clock
+) -> None:  # type: ignore[no-untyped-def]
+    """A refused call never reaches GitHub, so it can never refresh `remaining`: the guard must
+    stop trusting the old count when its window ends, or users stay locked out until a restart."""
+
+    def page(org: str, *, remaining: int, reset_in_s: int) -> respx.Route:
+        response = limited_page(1, 1, remaining=remaining)
+        reset = int(clock().timestamp()) + reset_in_s
+        response.headers["x-ratelimit-reset"] = str(reset)
+        return mock.get(f"{BASE}/orgs/{org}/repos").mock(return_value=response)
+
+    page("acme", remaining=12, reset_in_s=1800)  # exactly at the floor (0.2 * 60)
+    app = app_factory(auth_mode="none", upstream_reserve_fraction=0.2, **MANY)
+    assert (await app.client.get(URL.format("acme"))).status_code == 200
+
+    other = page("other", remaining=59, reset_in_s=1800 + 3600)
+    clock.advance(1799)  # the window is still open: refused, with the real time left
+    refused = await app.client.get(URL.format("other"))
+    assert refused.status_code == 503
+    assert refused.headers["retry-after"] == "1"
+    assert other.call_count == 0
+
+    clock.advance(1)  # the window has ended: one real call re-learns the quota
+    assert (await app.client.get(URL.format("other"))).status_code == 200
+    assert other.call_count == 1
+    assert app.services.github.rate_limit.remaining == 59
+
+
+async def test_reserve_still_blocks_a_fan_out_learned_from_the_new_window(
+    app_factory: AppFactory, mock: respx.MockRouter, clock
+) -> None:  # type: ignore[no-untyped-def]
+    """After a reset only page 1 goes out on trust; its headers decide the rest of the walk."""
+
+    def route(org: str, n: int, last: int, *, remaining: int, reset_in_s: int) -> respx.Route:
+        response = page_response(n, last, remaining=remaining)
+        response.headers["x-ratelimit-limit"] = "60"
+        response.headers["x-ratelimit-reset"] = str(int(clock().timestamp()) + reset_in_s)
+        return mock.get(f"{BASE}/orgs/{org}/repos", params={"page": str(n)}).mock(
+            return_value=response
+        )
+
+    route("small", 1, 1, remaining=12, reset_in_s=60)
+    app = app_factory(auth_mode="none", upstream_reserve_fraction=0.2, **MANY)
+    assert (await app.client.get(URL.format("small"))).status_code == 200
+
+    clock.advance(60)
+    # Something else on this IP has already used most of the new window.
+    routes = {n: route("acme", n, 5, remaining=14, reset_in_s=3600) for n in range(1, 6)}
+    r = await app.client.get(URL.format("acme"))  # fan-out of 4 would leave 10 < 12
+    assert r.status_code == 503
+    assert r.json()["pages_needed"] == 5
+    assert routes[1].call_count == 1
+    assert sum(routes[n].call_count for n in range(2, 6)) == 0
